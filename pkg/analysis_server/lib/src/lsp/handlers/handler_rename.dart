@@ -9,6 +9,8 @@ import 'package:analysis_server/src/lsp/handlers/handlers.dart';
 import 'package:analysis_server/src/lsp/lsp_analysis_server.dart';
 import 'package:analysis_server/src/lsp/mapping.dart';
 import 'package:analysis_server/src/services/refactoring/refactoring.dart';
+import 'package:analysis_server/src/services/refactoring/rename_class_member.dart';
+import 'package:path/path.dart' as pathLib;
 
 class PrepareRenameHandler
     extends MessageHandler<TextDocumentPositionParams, RangeAndPlaceholder?> {
@@ -196,7 +198,85 @@ class RenameHandler extends MessageHandler<RenameParams, WorkspaceEdit?> {
       }
 
       final workspaceEdit = createWorkspaceEdit(server, change);
-      return success(workspaceEdit);
+
+      bool changeClassName = refactoring is RenameClassMemberRefactoringImpl;
+
+      if (changeClassName) {
+        final oldClassName = refactoring.oldName;
+
+        final oldPath = path.result;
+        final resolvedUnit = await server.getResolvedUnit(oldPath);
+        if (resolvedUnit == null) {
+          return success(null);
+        }
+
+        final oldPathResource = server.resourceProvider.getResource(oldPath);
+
+        final oldNameFile = oldPathResource.shortName;
+
+        bool needToChangeFileName = _checkSameString(oldClassName, oldNameFile);
+        if (needToChangeFileName) {
+          final newFileName = _toLowercaseWithUnderscores(refactoring.newName);
+
+          final fileFolder = oldPathResource.parent2;
+
+          final folderPath = fileFolder.path;
+
+          final newFilePath = pathLib.join(folderPath, newFileName);
+
+          // ask the user if want to once time and all times
+
+          // save results if needed
+
+          // allow the user to chage the settings
+
+          final refactoringFileName = MoveFileRefactoring(
+              server.resourceProvider,
+              server.refactoringWorkspace,
+              resolvedUnit,
+              oldPath)
+            ..newFile = newFilePath;
+
+          final change = await refactoringFileName.createChange();
+          final edit = createWorkspaceEdit(server, change);
+
+          return success(edit);
+        }
+      } else {
+        success(workspaceEdit);
+      }
+
+      // final workspaceEdit = createWorkspaceEdit(server, change);
+      // return success(workspaceEdit);
     });
+  }
+
+  bool _checkSameString(
+      String upperCamelCase, String lowerCaseWithUnderscores) {
+    return _toLowercaseWithUnderscores(upperCamelCase) ==
+        lowerCaseWithUnderscores;
+  }
+
+  // return empty string if can't convert
+  String _toLowercaseWithUnderscores(String upperCamelCase) {
+    if (upperCamelCase.isEmpty) {
+      return "";
+    }
+
+    String returnString = upperCamelCase[0].toLowerCase();
+
+    const upperAAscii = 65;
+    const upperZAscii = 90;
+    const upperToLowerDiff = 32;
+
+    for (int char in upperCamelCase.runes) {
+      bool isUpperCase = char >= upperAAscii && char <= upperZAscii;
+      if (isUpperCase) {
+        returnString += "_" + String.fromCharCode(char - upperToLowerDiff);
+      } else {
+        returnString += String.fromCharCode(char);
+      }
+    }
+    return returnString;
   }
 }
