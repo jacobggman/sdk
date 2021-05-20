@@ -201,53 +201,73 @@ class RenameHandler extends MessageHandler<RenameParams, WorkspaceEdit?> {
 
       bool changeClassName = refactoring is RenameClassMemberRefactoringImpl;
 
-      if (changeClassName) {
-        final oldClassName = refactoring.oldName;
-
-        final oldPath = path.result;
-        final resolvedUnit = await server.getResolvedUnit(oldPath);
-        if (resolvedUnit == null) {
-          return success(null);
-        }
-
-        final oldPathResource = server.resourceProvider.getResource(oldPath);
-
-        final oldNameFile = oldPathResource.shortName;
-
-        bool needToChangeFileName = _checkSameString(oldClassName, oldNameFile);
-        if (needToChangeFileName) {
-          final newFileName = _toLowercaseWithUnderscores(refactoring.newName);
-
-          final fileFolder = oldPathResource.parent2;
-
-          final folderPath = fileFolder.path;
-
-          final newFilePath = pathLib.join(folderPath, newFileName);
-
-          // ask the user if want to once time and all times
-
-          // save results if needed
-
-          // allow the user to chage the settings
-
-          final refactoringFileName = MoveFileRefactoring(
-              server.resourceProvider,
-              server.refactoringWorkspace,
-              resolvedUnit,
-              oldPath)
-            ..newFile = newFilePath;
-
-          final change = await refactoringFileName.createChange();
-          final edit = createWorkspaceEdit(server, change);
-
-          return success(edit);
-        }
-      } else {
-        success(workspaceEdit);
+      // TODO: change class name when change file name
+      if (!changeClassName) {
+        return success(workspaceEdit);
+      }
+      bool saveToNotChangeFileName = params.changeClassFileName != null &&
+          params.changeClassFileName == false;
+      if (saveToNotChangeFileName) {
+        return success(workspaceEdit);
       }
 
-      // final workspaceEdit = createWorkspaceEdit(server, change);
-      // return success(workspaceEdit);
+      final oldClassName = refactoring.oldName;
+
+      final oldPath = path.result;
+      final resolvedUnit = await server.getResolvedUnit(oldPath);
+      if (resolvedUnit == null) {
+        return success(null);
+      }
+
+      final oldPathResource = server.resourceProvider.getResource(oldPath);
+
+      final oldNameFile = oldPathResource.shortName;
+
+      bool needToChangeFileName = _checkSameString(oldClassName, oldNameFile);
+
+      if (!needToChangeFileName) {
+        return success(workspaceEdit);
+      }
+
+      final newFileName = _toLowercaseWithUnderscores(refactoring.newName);
+
+      final fileFolder = oldPathResource.parent2;
+
+      final folderPath = fileFolder.path;
+
+      final newFilePath = pathLib.join(folderPath, newFileName);
+
+      if (params.changeClassFileName == null) {
+        // ask the user if want to once time and all times
+        final userChoice = await server.showUserPrompt(
+          MessageType.Info,
+          "Do you want also to change the file $oldNameFile name to $newFileName?",
+          [
+            MessageActionItem(title: UserPromptActions.thisTimeOnly),
+            MessageActionItem(title: UserPromptActions.always),
+            MessageActionItem(title: UserPromptActions.never),
+          ],
+        );
+
+        if (token.isCancellationRequested) {
+          return success(workspaceEdit);
+        }
+
+        if (userChoice.title == UserPromptActions.never) {
+          // TODO: save the choise
+          return success(workspaceEdit);
+        }
+      }
+
+      final refactoringFileName = MoveFileRefactoring(server.resourceProvider,
+          server.refactoringWorkspace, resolvedUnit, oldPath)
+        ..newFile = newFilePath;
+
+      final changeFileName = await refactoringFileName.createChange();
+
+      final edit = createWorkspaceEdit(server, changeFileName);
+
+      return success(edit);
     });
   }
 
