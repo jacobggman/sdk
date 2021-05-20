@@ -176,4 +176,7 @@ abstract class ServerErrorCodes {
 abstract class UserPromptActions {
   static const String cancel = 'Cancel';
   static const String renameAnyway = 'Rename Anyway';
+  static const String thisTimeOnly = 'This Time Only';
+  static const String always = 'Always';
+  static const String never = 'Never';
 }
