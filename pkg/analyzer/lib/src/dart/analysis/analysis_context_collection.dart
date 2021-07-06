@@ -11,6 +11,7 @@ import 'package:analyzer/src/dart/analysis/byte_store.dart';
 import 'package:analyzer/src/dart/analysis/context_builder.dart';
 import 'package:analyzer/src/dart/analysis/driver.dart';
 import 'package:analyzer/src/dart/analysis/driver_based_analysis_context.dart';
+import 'package:analyzer/src/dart/analysis/file_content_cache.dart';
 import 'package:analyzer/src/dart/analysis/performance_logger.dart';
 import 'package:analyzer/src/generated/engine.dart' show AnalysisOptionsImpl;
 import 'package:cli_util/cli_util.dart';
@@ -39,6 +40,7 @@ class AnalysisContextCollectionImpl implements AnalysisContextCollection {
     bool retainDataForTesting = false,
     String? sdkPath,
     AnalysisDriverScheduler? scheduler,
+    FileContentCache? fileContentCache,
     void Function(AnalysisOptionsImpl)? updateAnalysisOptions,
   }) : resourceProvider =
             resourceProvider ?? PhysicalResourceProvider.INSTANCE {
@@ -71,9 +73,24 @@ class AnalysisContextCollectionImpl implements AnalysisContextCollection {
         sdkPath: sdkPath,
         scheduler: scheduler,
         updateAnalysisOptions: updateAnalysisOptions,
+        fileContentCache: fileContentCache,
       );
       contexts.add(context);
     }
+  }
+
+  /// Return `true` if the read state of configuration files is consistent
+  /// with their current state on the file system. We use this as a work
+  /// around an issue with watching for file system changes.
+  bool get areWorkspacesConsistent {
+    for (var analysisContext in contexts) {
+      var contextRoot = analysisContext.contextRoot;
+      var workspace = contextRoot.workspace;
+      if (!workspace.isConsistentWithFileSystem) {
+        return false;
+      }
+    }
+    return true;
   }
 
   @override

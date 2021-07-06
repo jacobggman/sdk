@@ -475,15 +475,16 @@ void AssertBooleanInstr::PrintOperandsTo(BaseTextBuffer* f) const {
 }
 
 void ClosureCallInstr::PrintOperandsTo(BaseTextBuffer* f) const {
-  f->AddString(" function=");
+  if (FLAG_precompiled_mode && FLAG_use_bare_instructions) {
+    f->AddString(" closure=");
+  } else {
+    f->AddString(" function=");
+  }
   InputAt(InputCount() - 1)->PrintTo(f);
   f->Printf("<%" Pd ">", type_args_len());
   for (intptr_t i = 0; i < ArgumentCount(); ++i) {
     f->AddString(", ");
     ArgumentValueAt(i)->PrintTo(f);
-  }
-  if (entry_kind() == Code::EntryKind::kUnchecked) {
-    f->AddString(" using unchecked entrypoint");
   }
 }
 
@@ -656,10 +657,10 @@ void RelationalOpInstr::PrintOperandsTo(BaseTextBuffer* f) const {
 
 void AllocationInstr::PrintOperandsTo(BaseTextBuffer* f) const {
   Definition::PrintOperandsTo(f);
-  if (InputCount() > 0) {
-    f->AddString(", ");
-  }
   if (Identity().IsNotAliased()) {
+    if (InputCount() > 0) {
+      f->AddString(", ");
+    }
     f->AddString("<not-aliased>");
   }
 }
@@ -786,7 +787,7 @@ void DoubleTestOpInstr::PrintOperandsTo(BaseTextBuffer* f) const {
   value()->PrintTo(f);
 }
 
-static const char* simd_op_kind_string[] = {
+static const char* const simd_op_kind_string[] = {
 #define CASE(Arity, Mask, Name, ...) #Name,
     SIMD_OP_LIST(CASE, CASE)
 #undef CASE
@@ -935,6 +936,8 @@ const char* RepresentationToCString(Representation rep) {
       return "float";
     case kUnboxedUint8:
       return "uint8";
+    case kUnboxedUint16:
+      return "uint16";
     case kUnboxedInt32:
       return "int32";
     case kUnboxedUint32:
@@ -987,6 +990,11 @@ void PhiInstr::PrintTo(BaseTextBuffer* f) const {
 void UnboxIntegerInstr::PrintOperandsTo(BaseTextBuffer* f) const {
   if (is_truncating()) {
     f->AddString("[tr], ");
+  }
+  if (SpeculativeModeOfInputs() == kGuardInputs) {
+    f->AddString("[guard-inputs], ");
+  } else {
+    f->AddString("[non-speculative], ");
   }
   Definition::PrintOperandsTo(f);
 }

@@ -1436,6 +1436,10 @@ class IncrementalCompiler implements IncrementalKernelGenerator {
     }
   }
 
+  bool dontReissueLibraryProblemsFor(Uri uri) {
+    return uri == debugExprUri;
+  }
+
   /// Internal method.
   void reissueLibraryProblems(
       Set<Library> allLibraries, List<Library> compiledLibraries) {
@@ -1448,7 +1452,7 @@ class IncrementalCompiler implements IncrementalKernelGenerator {
         for (String jsonString in library.problemsAsJson) {
           DiagnosticMessageFromJson message =
               new DiagnosticMessageFromJson.fromJson(jsonString);
-          if (message.uri == debugExprUri) {
+          if (dontReissueLibraryProblemsFor(message.uri)) {
             continue;
           }
           context.options.reportDiagnosticMessage(message);
@@ -1940,7 +1944,7 @@ class IncrementalCompiler implements IncrementalKernelGenerator {
         userCode.loader,
         null,
         scope: libraryBuilder.scope.createNestedScope("expression"),
-        nameOrigin: libraryBuilder.library,
+        nameOrigin: libraryBuilder,
       );
       ticker.logMs("Created debug library");
 
@@ -2249,6 +2253,55 @@ class IncrementalCompiler implements IncrementalKernelGenerator {
 }
 
 /// Translate a parts "partUri" to an actual uri with handling of invalid uris.
+///
+/// ```
+/// DartDocTest(
+///   getPartUri(
+///     Uri.parse("file://path/to/parent.dart"),
+///     new LibraryPart([], "simple.dart")
+///   ),
+///   Uri.parse("file://path/to/simple.dart")
+/// )
+/// DartDocTest(
+///   getPartUri(
+///     Uri.parse("file://path/to/parent.dart"),
+///     new LibraryPart([], "dir/simple.dart")
+///   ),
+///   Uri.parse("file://path/to/dir/simple.dart")
+/// )
+/// DartDocTest(
+///   getPartUri(
+///     Uri.parse("file://path/to/parent.dart"),
+///     new LibraryPart([], "../simple.dart")
+///   ),
+///   Uri.parse("file://path/simple.dart")
+/// )
+/// DartDocTest(
+///   getPartUri(
+///     Uri.parse("file://path/to/parent.dart"),
+///     new LibraryPart([], "file:///my/path/absolute.dart")
+///   ),
+///   Uri.parse("file:///my/path/absolute.dart")
+/// )
+/// DartDocTest(
+///   getPartUri(
+///     Uri.parse("file://path/to/parent.dart"),
+///     new LibraryPart([], "package:foo/hello.dart")
+///   ),
+///   Uri.parse("package:foo/hello.dart")
+/// )
+/// ```
+/// And with invalid part uri:
+/// ```
+/// DartDocTest(
+///   getPartUri(
+///     Uri.parse("file://path/to/parent.dart"),
+///     new LibraryPart([], ":hello")
+///   ),
+///   new Uri(scheme: SourceLibraryBuilder.MALFORMED_URI_SCHEME,
+///     query: Uri.encodeQueryComponent(":hello"))
+/// )
+/// ```
 Uri getPartUri(Uri parentUri, LibraryPart part) {
   try {
     return parentUri.resolve(part.partUri);

@@ -371,6 +371,16 @@ mixin ClientCapabilitiesHelperMixin {
     return extendWorkspaceCapabilities(source, {'configuration': true});
   }
 
+  TextDocumentClientCapabilities withDiagnosticCodeDescriptionSupport(
+    TextDocumentClientCapabilities source,
+  ) {
+    return extendTextDocumentCapabilities(source, {
+      'publishDiagnostics': {
+        'codeDescriptionSupport': true,
+      }
+    });
+  }
+
   TextDocumentClientCapabilities withDiagnosticTagSupport(
     TextDocumentClientCapabilities source,
     List<DiagnosticTag> tags,
@@ -827,11 +837,7 @@ mixin LspAnalysisServerTestMixin implements ClientCapabilitiesHelperMixin {
     final path = Uri.parse(edit.textDocument.uri).toFilePath();
     final expectedVersion = expectedVersions[path];
 
-    if (edit.textDocument is OptionalVersionedTextDocumentIdentifier) {
-      expect(edit.textDocument.version, equals(expectedVersion));
-    } else {
-      throw 'Document identifier for $path was not versioned (expected version $expectedVersion)';
-    }
+    expect(edit.textDocument.version, equals(expectedVersion));
   }
 
   /// Validates the document versions for a set of edits match the versions in
@@ -1433,7 +1439,7 @@ mixin LspAnalysisServerTestMixin implements ClientCapabilitiesHelperMixin {
 
   Position positionFromOffset(int offset, String contents) {
     final lineInfo = LineInfo.fromContent(withoutMarkers(contents));
-    return toPosition(lineInfo.getLocation(offset) as CharacterLocation);
+    return toPosition(lineInfo.getLocation(offset));
   }
 
   Future<RangeAndPlaceholder?> prepareRename(Uri uri, Position pos) {

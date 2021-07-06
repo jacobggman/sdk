@@ -27,6 +27,7 @@ import 'package:analyzer/src/error/codes.dart';
 import 'package:analyzer/src/error/deprecated_member_use_verifier.dart';
 import 'package:analyzer/src/error/error_handler_verifier.dart';
 import 'package:analyzer/src/error/must_call_super_verifier.dart';
+import 'package:analyzer/src/error/null_safe_api_verifier.dart';
 import 'package:analyzer/src/generated/constant.dart';
 import 'package:analyzer/src/generated/engine.dart';
 import 'package:analyzer/src/generated/resolver.dart';
@@ -40,6 +41,10 @@ import 'package:meta/meta_meta.dart';
 /// looking for violations of Dart best practices.
 class BestPracticesVerifier extends RecursiveAstVisitor<void> {
   static const String _TO_INT_METHOD_NAME = "toInt";
+
+  static final Map<String, TargetKind> _targetKindsByName = {
+    for (final kind in TargetKind.values) kind.toString(): kind,
+  };
 
   /// The class containing the AST nodes being visited, or `null` if we are not
   /// in the scope of a class.
@@ -71,6 +76,8 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
   final MustCallSuperVerifier _mustCallSuperVerifier;
 
   final ErrorHandlerVerifier _errorHandlerVerifier;
+
+  final NullSafeApiVerifier _nullSafeApiVerifier;
 
   /// The [WorkspacePackage] in which [_currentLibrary] is declared.
   final WorkspacePackage? _workspacePackage;
@@ -111,6 +118,7 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
         _mustCallSuperVerifier = MustCallSuperVerifier(_errorReporter),
         _errorHandlerVerifier =
             ErrorHandlerVerifier(_errorReporter, typeProvider, typeSystem),
+        _nullSafeApiVerifier = NullSafeApiVerifier(_errorReporter, typeSystem),
         _workspacePackage = workspacePackage {
     _deprecatedVerifier.pushInDeprecatedValue(_currentLibrary.hasDeprecated);
     _inDoNotStoreMember = _currentLibrary.hasDoNotStore;
@@ -217,7 +225,8 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
             HintCode.INVALID_SEALED_ANNOTATION, node, [node.element!.name]);
       }
     } else if (element.isVisibleForTemplate == true ||
-        element.isVisibleForTesting == true) {
+        element.isVisibleForTesting == true ||
+        element.isVisibleForOverriding == true) {
       if (parent is Declaration) {
         void reportInvalidAnnotation(Element declaredElement) {
           _errorReporter.reportErrorForNode(
@@ -226,23 +235,49 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
               [declaredElement.name, node.name.name]);
         }
 
+        void reportInvalidVisibleForOverriding(Element declaredElement) {
+          _errorReporter.reportErrorForNode(
+              HintCode.INVALID_VISIBLE_FOR_OVERRIDING_ANNOTATION,
+              node,
+              [declaredElement.name, node.name.name]);
+        }
+
         if (parent is TopLevelVariableDeclaration) {
           for (VariableDeclaration variable in parent.variables.variables) {
-            var element = variable.declaredElement as TopLevelVariableElement;
-            if (Identifier.isPrivateName(element.name)) {
-              reportInvalidAnnotation(element);
+            var variableElement =
+                variable.declaredElement as TopLevelVariableElement;
+
+            if (Identifier.isPrivateName(variableElement.name)) {
+              reportInvalidAnnotation(variableElement);
+            }
+
+            if (element.isVisibleForOverriding == true) {
+              // Top-level variables can't be overridden.
+              reportInvalidVisibleForOverriding(variableElement);
             }
           }
         } else if (parent is FieldDeclaration) {
           for (VariableDeclaration variable in parent.fields.variables) {
-            var element = variable.declaredElement as FieldElement;
-            if (Identifier.isPrivateName(element.name)) {
-              reportInvalidAnnotation(element);
+            var fieldElement = variable.declaredElement as FieldElement;
+            if (parent.isStatic && element.isVisibleForOverriding == true) {
+              reportInvalidVisibleForOverriding(fieldElement);
+            }
+
+            if (Identifier.isPrivateName(fieldElement.name)) {
+              reportInvalidAnnotation(fieldElement);
             }
           }
-        } else if (parent.declaredElement != null &&
-            Identifier.isPrivateName(parent.declaredElement!.name!)) {
-          reportInvalidAnnotation(parent.declaredElement!);
+        } else if (parent.declaredElement != null) {
+          final declaredElement = parent.declaredElement!;
+          if (element.isVisibleForOverriding &&
+              (!declaredElement.isInstanceMember ||
+                  declaredElement.enclosingElement is ExtensionElement)) {
+            reportInvalidVisibleForOverriding(declaredElement);
+          }
+
+          if (Identifier.isPrivateName(declaredElement.name!)) {
+            reportInvalidAnnotation(declaredElement);
+          }
         }
       } else {
         // Something other than a declaration was annotated. Whatever this is,
@@ -368,6 +403,7 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
   void visitExportDirective(ExportDirective node) {
     _deprecatedVerifier.exportDirective(node);
     _checkForInternalExport(node);
+    _checkForUseOfNativeExtension(node);
     super.visitExportDirective(node);
   }
 
@@ -408,11 +444,12 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
         }
 
         final overriddenElement = getOverriddenPropertyAccessor();
-        if (_hasNonVirtualAnnotation(overriddenElement)) {
+        if (overriddenElement != null &&
+            _hasNonVirtualAnnotation(overriddenElement)) {
           _errorReporter.reportErrorForNode(
               HintCode.INVALID_OVERRIDE_OF_NON_VIRTUAL_MEMBER,
               field.name,
-              [field.name, overriddenElement!.enclosingElement.name]);
+              [field.name, overriddenElement.enclosingElement.name]);
         }
         if (!_invalidAccessVerifier._inTestDirectory) {
           _checkForAssignmentOfDoNotStore(field.initializer);
@@ -521,6 +558,7 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
     }
     _invalidAccessVerifier.verifyImport(node);
     _checkForImportOfLegacyLibraryIntoNullSafe(node);
+    _checkForUseOfNativeExtension(node);
     super.visitImportDirective(node);
   }
 
@@ -533,6 +571,7 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
   @override
   void visitInstanceCreationExpression(InstanceCreationExpression node) {
     _deprecatedVerifier.instanceCreationExpression(node);
+    _nullSafeApiVerifier.instanceCreation(node);
     _checkForLiteralConstructorUse(node);
     super.visitInstanceCreationExpression(node);
   }
@@ -551,10 +590,6 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
 
     Name name = Name(_currentLibrary.source.uri, element.name);
 
-    bool elementIsOverride() =>
-        element is ClassMemberElement && enclosingElement is ClassElement
-            ? _inheritanceManager.getOverridden2(enclosingElement, name) != null
-            : false;
     ExecutableElement? getConcreteOverriddenElement() =>
         element is ClassMemberElement && enclosingElement is ClassElement
             ? _inheritanceManager.getMember2(enclosingElement, name,
@@ -577,21 +612,29 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
       _mustCallSuperVerifier.checkMethodDeclaration(node);
       _checkForUnnecessaryNoSuchMethod(node);
 
-      if (!node.isSetter && !elementIsOverride()) {
+      var elementIsOverride = element is ClassMemberElement &&
+              enclosingElement is ClassElement
+          ? _inheritanceManager.getOverridden2(enclosingElement, name) != null
+          : false;
+
+      if (!node.isSetter && !elementIsOverride) {
         _checkStrictInferenceReturnType(node.returnType, node, node.name.name);
       }
-      _checkStrictInferenceInParameters(node.parameters, body: node.body);
+      if (!elementIsOverride) {
+        _checkStrictInferenceInParameters(node.parameters, body: node.body);
+      }
 
       var overriddenElement = getConcreteOverriddenElement();
       if (overriddenElement == null && (node.isSetter || node.isGetter)) {
         overriddenElement = getOverriddenPropertyAccessor();
       }
 
-      if (_hasNonVirtualAnnotation(overriddenElement)) {
+      if (overriddenElement != null &&
+          _hasNonVirtualAnnotation(overriddenElement)) {
         _errorReporter.reportErrorForNode(
             HintCode.INVALID_OVERRIDE_OF_NON_VIRTUAL_MEMBER,
             node.name,
-            [node.name, overriddenElement!.enclosingElement.name]);
+            [node.name, overriddenElement.enclosingElement.name]);
       }
 
       super.visitMethodDeclaration(node);
@@ -606,6 +649,7 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
     _deprecatedVerifier.methodInvocation(node);
     _checkForNullAwareHints(node, node.operator);
     _errorHandlerVerifier.verifyMethodInvocation(node);
+    _nullSafeApiVerifier.methodInvocation(node);
     super.visitMethodInvocation(node);
   }
 
@@ -1345,8 +1389,7 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
   /// Generate a hint for `noSuchMethod` methods that do nothing except of
   /// calling another `noSuchMethod` that is not defined by `Object`.
   ///
-  /// @return `true` if and only if a hint code is generated on the passed node
-  /// See [HintCode.UNNECESSARY_NO_SUCH_METHOD].
+  /// Return `true` if and only if a hint code is generated on the passed node.
   bool _checkForUnnecessaryNoSuchMethod(MethodDeclaration node) {
     if (node.name.name != FunctionElement.NO_SUCH_METHOD_METHOD_NAME) {
       return false;
@@ -1371,7 +1414,7 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
     if (body is ExpressionFunctionBody) {
       if (isNonObjectNoSuchMethodInvocation(body.expression)) {
         _errorReporter.reportErrorForNode(
-            HintCode.UNNECESSARY_NO_SUCH_METHOD, node);
+            HintCode.UNNECESSARY_NO_SUCH_METHOD, node.name);
         return true;
       }
     } else if (body is BlockFunctionBody) {
@@ -1381,12 +1424,22 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
         if (returnStatement is ReturnStatement &&
             isNonObjectNoSuchMethodInvocation(returnStatement.expression)) {
           _errorReporter.reportErrorForNode(
-              HintCode.UNNECESSARY_NO_SUCH_METHOD, node);
+              HintCode.UNNECESSARY_NO_SUCH_METHOD, node.name);
           return true;
         }
       }
     }
     return false;
+  }
+
+  void _checkForUseOfNativeExtension(UriBasedDirective node) {
+    var uri = node.uriContent;
+    if (uri == null) {
+      return;
+    }
+    if (uri.startsWith('dart-ext:')) {
+      _errorReporter.reportErrorForNode(HintCode.USE_OF_NATIVE_EXTENSION, node);
+    }
   }
 
   void _checkRequiredParameter(FormalParameterList node) {
@@ -1584,6 +1637,8 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
     } else if (target is FunctionTypeAlias || target is GenericTypeAlias) {
       return kinds.contains(TargetKind.typedefType) ||
           kinds.contains(TargetKind.type);
+    } else if (target is TopLevelVariableDeclaration) {
+      return kinds.contains(TargetKind.topLevelVariable);
     }
     return false;
   }
@@ -1609,9 +1664,23 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
       if (annotation.isTarget) {
         var value = annotation.computeConstantValue()!;
         var kinds = <TargetKind>{};
+
         for (var kindObject in value.getField('kinds')!.toSetValue()!) {
+          // We can't directly translate the index from the analyzed TargetKind
+          // constant to TargetKinds.values because the analyzer from the SDK
+          // may have been compiled with a different version of pkg:meta.
           var index = kindObject.getField('index')!.toIntValue()!;
-          kinds.add(TargetKind.values[index]);
+          var targetKindClass =
+              (kindObject.type as InterfaceType).element as EnumElementImpl;
+          // Instead, map constants to their TargetKind by comparing getter
+          // names.
+          var getter = targetKindClass.constants[index];
+          var name = 'TargetKind.${getter.name}';
+
+          var foundTargetKind = _targetKindsByName[name];
+          if (foundTargetKind != null) {
+            kinds.add(foundTargetKind);
+          }
         }
         return kinds;
       }
@@ -1680,10 +1749,7 @@ class BestPracticesVerifier extends RecursiveAstVisitor<void> {
     return identifier?.name ?? '';
   }
 
-  static bool _hasNonVirtualAnnotation(ExecutableElement? element) {
-    if (element == null) {
-      return false;
-    }
+  static bool _hasNonVirtualAnnotation(ExecutableElement element) {
     if (element is PropertyAccessorElement && element.isSynthetic) {
       return element.variable.hasNonVirtual;
     }
@@ -1838,6 +1904,8 @@ class _InvalidAccessVerifier {
       }
     }
 
+    bool hasVisibleForOverriding = _hasVisibleForOverriding(element);
+
     // At this point, [identifier] was not cleared as protected access, nor
     // cleared as access for templates or testing. Report a violation for each
     // annotation present.
@@ -1875,6 +1943,11 @@ class _InvalidAccessVerifier {
           node,
           [name, definingClass!.source!.uri]);
     }
+
+    if (hasVisibleForOverriding) {
+      _errorReporter.reportErrorForNode(
+          HintCode.INVALID_USE_OF_VISIBLE_FOR_OVERRIDING_MEMBER, node, [name]);
+    }
   }
 
   bool _hasInternal(Element? element) {
@@ -1909,6 +1982,19 @@ class _InvalidAccessVerifier {
       return false;
     }
     return element.thisType.asInstanceOf(superElement) != null;
+  }
+
+  bool _hasVisibleForOverriding(Element element) {
+    if (element.hasVisibleForOverriding) {
+      return true;
+    }
+
+    if (element is PropertyAccessorElement &&
+        element.variable.hasVisibleForOverriding) {
+      return true;
+    }
+
+    return false;
   }
 
   bool _hasVisibleForTemplate(Element? element) {
@@ -1977,42 +2063,6 @@ class _UsedParameterVisitor extends RecursiveAstVisitor<void> {
     }
     if (_parameters.contains(element)) {
       _usedParameters.add(element as ParameterElement);
-    }
-  }
-}
-
-extension on TargetKind {
-  /// Return a user visible string used to describe this target kind.
-  String get displayString {
-    switch (this) {
-      case TargetKind.classType:
-        return 'classes';
-      case TargetKind.enumType:
-        return 'enums';
-      case TargetKind.extension:
-        return 'extensions';
-      case TargetKind.field:
-        return 'fields';
-      case TargetKind.function:
-        return 'top-level functions';
-      case TargetKind.library:
-        return 'libraries';
-      case TargetKind.getter:
-        return 'getters';
-      case TargetKind.method:
-        return 'methods';
-      case TargetKind.mixinType:
-        return 'mixins';
-      case TargetKind.parameter:
-        return 'parameters';
-      case TargetKind.setter:
-        return 'setters';
-      case TargetKind.topLevelVariable:
-        return 'top-level variables';
-      case TargetKind.type:
-        return 'types (classes, enums, mixins, or typedefs)';
-      case TargetKind.typedefType:
-        return 'typedefs';
     }
   }
 }

@@ -38,7 +38,6 @@ var timerLoad2 = Stopwatch();
 class LibraryContext {
   static const _maxLinkedDataInBytes = 64 * 1024 * 1024;
 
-  final int id = fileObjectId++;
   final LibraryContextTestView testView;
   final PerformanceLog logger;
   final ByteStore byteStore;
@@ -100,26 +99,20 @@ class LibraryContext {
     var bytesGet = 0;
     var bytesPut = 0;
 
-    var thisLoadLogBuffer = StringBuffer();
-
-    void loadBundle(LibraryCycle cycle, String debugPrefix) {
+    void loadBundle(LibraryCycle cycle) {
       if (cycle.libraries.isEmpty ||
           elementFactory.hasLibrary(cycle.libraries.first.uriStr)) {
         return;
       }
 
-      thisLoadLogBuffer.writeln('$debugPrefix$cycle');
-
       librariesTotal += cycle.libraries.length;
 
-      cycle.directDependencies.forEach(
-        (e) => loadBundle(e, '$debugPrefix  '),
-      );
+      cycle.directDependencies.forEach(loadBundle);
 
       var unitsInformativeBytes = <Uri, Uint8List>{};
       for (var library in cycle.libraries) {
         for (var file in library.libraryFiles) {
-          unitsInformativeBytes[file.uri] = file.getAstBytes();
+          unitsInformativeBytes[file.uri] = file.getInformativeBytes();
         }
       }
 
@@ -153,54 +146,22 @@ class LibraryContext {
 
             inputUnits.add(
               link2.LinkInputUnit(
-                partUriStr,
-                file.source,
-                isSynthetic,
-                unit,
+                // TODO(scheglov) bad, group part data
+                partDirectiveIndex: partIndex - 1,
+                partUriStr: partUriStr,
+                source: file.source,
+                sourceContent: file.content,
+                isSynthetic: isSynthetic,
+                unit: unit,
               ),
             );
-
-            // TODO(scheglov) remove after fixing linking issues
-            {
-              var existingLibraryReference =
-                  elementFactory.rootReference[libraryFile.uriStr];
-              if (existingLibraryReference != null) {
-                var existingElement =
-                    existingLibraryReference.element as LibraryElement?;
-                if (existingElement != null) {
-                  var buffer = StringBuffer();
-
-                  buffer.writeln('[The library is already loaded]');
-                  buffer.writeln();
-
-                  var existingSource = existingElement.source;
-                  buffer.writeln('[oldUri: ${existingSource.uri}]');
-                  buffer.writeln('[oldPath: ${existingSource.fullName}]');
-                  buffer.writeln('[newUri: ${libraryFile.uriStr}]');
-                  buffer.writeln('[newPath: ${libraryFile.path}]');
-                  buffer.writeln('[cycle: $cycle]');
-                  buffer.writeln();
-
-                  buffer.writeln('Bundles loaded in this load2() invocation:');
-                  buffer.writeln(thisLoadLogBuffer);
-                  buffer.writeln();
-
-                  var libraryRefs = elementFactory.rootReference.children;
-                  var libraryUriList = libraryRefs.map((e) => e.name).toList();
-                  buffer.writeln('[elementFactory.libraries: $libraryUriList]');
-
-                  throw CaughtExceptionWithFiles(
-                    'Cycle loading state error',
-                    StackTrace.current,
-                    {'status': buffer.toString()},
-                  );
-                }
-              }
-            }
           }
 
           inputLibraries.add(
-            link2.LinkInputLibrary(librarySource, inputUnits),
+            link2.LinkInputLibrary(
+              source: librarySource,
+              units: inputUnits,
+            ),
           );
         }
         inputsTimer.stop();
@@ -227,20 +188,19 @@ class LibraryContext {
         // TODO(scheglov) Take / clear parsed units in files.
         bytesGet += resolutionBytes.length;
         librariesLoaded += cycle.libraries.length;
+        elementFactory.addBundle(
+          BundleReader(
+            elementFactory: elementFactory,
+            unitsInformativeBytes: unitsInformativeBytes,
+            resolutionBytes: resolutionBytes,
+          ),
+        );
       }
-
-      elementFactory.addBundle(
-        BundleReader(
-          elementFactory: elementFactory,
-          unitsInformativeBytes: unitsInformativeBytes,
-          resolutionBytes: resolutionBytes,
-        ),
-      );
     }
 
     logger.run('Prepare linked bundles', () {
       var libraryCycle = targetLibrary.libraryCycle;
-      loadBundle(libraryCycle, '');
+      loadBundle(libraryCycle);
       logger.writeln(
         '[librariesTotal: $librariesTotal]'
         '[librariesLoaded: $librariesLoaded]'

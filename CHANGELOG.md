@@ -4,15 +4,49 @@
 
 #### `dart:async`
 
-* The uncaught error handlers of `Zone`s are now run in the parent zone
-  of the zone where they were declared. This prevents a throwing handler
-  from causing an infinite loop by repeatedly triggering itself.
+*   The uncaught error handlers of `Zone`s are now run in the parent zone
+    of the zone where they were declared. This prevents a throwing handler
+    from causing an infinite loop by repeatedly triggering itself.
+
+*   Added `ignore()` as extension member on futures.
+
+*   Added `void unawaited(Future)` top-level function to deal with
+    the `unawaited_futures` lint.
 
 #### `dart:core`
+
+*   Introduce `Enum` interface implemented by all `enum` declarations.
 
 *   The native `DateTime` class now better handles local time around
     daylight saving changes that are not precisely one hour.
     (No change on the Web which uses the JavaScript `Date` object.)
+
+*   Adds static methods `hash`, `hashAll` and `hashAllUnordered` to the
+    `Object` class. These can be used to combine the hash codes of
+    multiple objects in a consistent way.
+
+*   The `Symbol` constructor now accepts any string as argument.
+    Symbols are equal if they were created from the same string.
+
+
+#### `dart:ffi`
+
+*   Adds the `DynamicLibrary.providesSymbol` function to check whether a symbol
+    is available in a dynamic library.
+
+#### `dart:html`
+
+*   `convertNativeToDart_Dictionary()` now converts objects
+    recursively, this fixes APIs like MediaStreamTrack.getCapabilities
+    that convert between Maps and browser Dictionaries. [#44319]
+
+[#44319]: https://github.com/dart-lang/sdk/issues/44319
+
+#### `dart:io`
+
+*   BREAKING CHANGE (for pre-migrated null safe code):
+    `HttpClient`'s `.authenticate`  and `.authenticateProxy` setter callbacks
+    must now accept a nullable `realm` argument.
 
 #### `dart:typed_data`
 
@@ -31,6 +65,7 @@
     was abandoned more than 5 years ago and is not supported by most browsers.
     The `dart:web_sql` library has been documented as unsupported and deprecated
     for many years as well and but wasn't annotated properly until now.
+
 ### Dart VM
 
 *   **Breaking Change** [#45071][]: `Dart_NewWeakPersistentHandle`'s and
@@ -44,19 +79,77 @@
 
 #### Dart command line
 
-- The `dart create` command has been updated to create projects that use the new
-  'core' set of lints from `package:lints`. See https://dart.dev/go/core-lints
-  for more information about these lints.
+*   **Breaking Change** [#46100][]: The standalone `dart2native` tool has been
+    marked deprecated, and now prints a warning message. Its replacements are
+    the `dart compile exe` and `dart compile aot-snapshot` commands, which offer
+    the same functionality. The `dart2native` tool will be removed from the Dart
+    SDK in Dart 2.15.
+
+*   **Breaking Change**: The standalone `dartfmt` tool has been marked
+    deprecated, and now prints a warning message. Instead, use `dart format`.
+    The `dartfmt` tool will be removed from the Dart SDK in Dart 2.15.
+
+    Note that `dart format` has [a different set of options and
+    defaults][dartfmt cli] than `dartfmt`.
+
+*   The `dart create` command has been updated to create projects that use the
+    new 'recommended' set of lints from `package:lints`. See
+    https://dart.dev/go/core-lints for more information about these lints.
+
+[#46100]: https://github.com/dart-lang/sdk/issues/46100
+[dartfmt cli]: https://github.com/dart-lang/dart_style/wiki/CLI-Changes
+
+* The `dart analyze` command has been extended to support specifying multiple
+  files or directories to analyze; see also https://github.com/dart-lang/sdk/issues/45352.
+
+* The `dartanalyzer` command's JSON output mode has been changed to emit the JSON
+  output on stdout instead of stderr.
 
 #### Linter
 
-Updated the Linter to `1.4.0`, which includes:
+Updated the Linter to `1.7.0`, which includes changes that
 
-- `directives_ordering` now checks ordering of `package:` imports in code
+- fix case-sensitive false positive in `use_full_hex_values_for_flutter_colors`.
+- improve try-block and switch statement flow analysis for 
+  `use_build_context_synchronously`.
+- update `use_setters_to_change_properties` to only highlight a method name,
+  not the entire body and doc comment.
+- update `unnecessary_getters_setters` to allow otherwise "unnecessary" getters
+  and setters with annotations.
+- update `missing_whitespace_between_adjacent_strings` to allow String
+  interpolations at the beginning and end of String literals.
+- update `unnecessary_getters_setters` to allow for setters with non-basic
+  assignments (for example, `??=` or `+=`).
+- relax `non_constant_identifier_names` to allow for a trailing
+  underscore.
+- fix false negative in `prefer_final_parameters` where first parameter
+  is final.
+- improve `directives_ordering` sorting of directives with dot paths and
+  dot-separated package names.
+- (internal) migrate to `SecurityLintCode` instead of deprecated
+  `SecurityLintCodeWithUniqueName`.
+- (internal) fix `avoid_types_as_parameter_names` to skip field formal
+  parameters.
+- fix false positives in `prefer_interpolation_to_compose_strings` where
+  the left operand is not a String.
+- fix false positives in `only_throw_errors` for misidentified type
+  variables.
+- add new lint: `depend_on_referenced_packages`.
+- update `avoid_returning_null_for_future` to skip checks for null-safe
+  libraries.
+- add new lint: `use_test_throws_matchers`.
+- relax `sort_child_properties_last` to accept closures after child.
+- improve performance for `prefer_contains` and `prefer_is_empty`.
+- add new lint: `noop_primitive_operations`.
+- mark `avoid_web_libraries_in_flutter` as stable.
+- add new lint: `prefer_final_parameters`.
+- update `prefer_initializing_formals` to allow assignments where identifier
+  names don't match.
+- update `directives_ordering` to checks ordering of `package:` imports in code
   outside pub packages.
-- simple reachability analysis added to `use_build_context_synchronously` to
+- add simple reachability analysis to `use_build_context_synchronously` to
   short-circuit await-discovery in terminating blocks.
-- `use_build_context_synchronously` updated to recognize nullable types when
+- update `use_build_context_synchronously` to recognize nullable types when
   accessed from legacy libraries.
 
 #### Pub
@@ -71,6 +164,8 @@ Updated the Linter to `1.4.0`, which includes:
   * Global ignores are no longer taken into account.
   * Even packages that are not in git source control will have their
     `.gitignore` files respected.
+  * `.gitignore` and `.pubignore` is always case-insensitive on MacOs and
+    Windows (as is default for `git` repositories).
 
 * New flag `dart pub deps --json` gives a machine parsable overview of the
   current dependencies.
@@ -86,6 +181,8 @@ Updated the Linter to `1.4.0`, which includes:
   This should fix several issues we had with incompatibilities between different
   system `tar`s.
 * `PUB_HOSTED_URL` can now include a trailing slash.
+* Incremental compilation is now used for compilation of executables from
+  dependencies when using `dart run <package>:<command>`.
 
 ### Language
 
@@ -131,6 +228,40 @@ Updated the Linter to `1.4.0`, which includes:
       f<int>(3);
     }
     ```
+
+## 2.13.4 - 2021-06-28
+
+This is a patch release that fixes:
+
+* a Dart VM compiler crash (issue [flutter/flutter#84212][]).
+* a DDC compiler crash (issue [flutter/flutter#82838][]).
+
+[flutter/flutter#84212]: https://github.com/flutter/flutter/issues/84212
+[flutter/flutter#82838]: https://github.com/flutter/flutter/issues/82838
+
+## 2.13.3 - 2021-06-10
+
+This is a patch release that fixes:
+
+* a Dart compiler crash (issue [flutter/flutter#83094][]).
+* an analysis server deadlock causing it to stop responding to IDE requests
+  (issue [#45996][]).
+* an analyzer crash when analyzing against `package:meta` `v1.4.0` (issue
+  [#46183][]).
+
+[flutter/flutter#83094]: https://github.com/flutter/flutter/issues/83094
+[#45996]: https://github.com/dart-lang/sdk/issues/45996
+[#46183]: https://github.com/dart-lang/sdk/issues/46183
+
+## 2.13.1 - 2021-05-25
+
+This is a patch release that fixes:
+
+* incorrect behavior in CastMap (issue [#45473][]).
+* missing nullability from recursive type hierarchies in DDC (issue [#45767][]).
+
+[#45473]: https://github.com/dart-lang/sdk/issues/45473
+[#45767]: https://github.com/dart-lang/sdk/issues/45767
 
 ## 2.13.0 - 2021-05-18
 

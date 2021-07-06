@@ -362,7 +362,8 @@ class BaseFlowGraphBuilder {
   // Builds the graph for an invocation of '_asFunctionInternal'.
   //
   // 'signatures' contains the pair [<dart signature>, <native signature>].
-  Fragment BuildFfiAsFunctionInternalCall(const TypeArguments& signatures);
+  Fragment BuildFfiAsFunctionInternalCall(const TypeArguments& signatures,
+                                          bool is_leaf);
 
   Fragment AllocateObject(TokenPosition position,
                           const Class& klass,
@@ -402,17 +403,13 @@ class BaseFlowGraphBuilder {
   Fragment BuildEntryPointsIntrospection();
 
   // Builds closure call with given number of arguments. Target closure
-  // function is taken from top of the stack.
+  // (in bare instructions mode) or closure function (otherwise) is taken from
+  // top of the stack.
   // PushArgument instructions should be already added for arguments.
   Fragment ClosureCall(TokenPosition position,
                        intptr_t type_args_len,
                        intptr_t argument_count,
-                       const Array& argument_names,
-                       bool use_unchecked_entry = false);
-
-  // Builds StringInterpolate instruction, an equivalent of
-  // _StringBase._interpolate call.
-  Fragment StringInterpolate(TokenPosition position);
+                       const Array& argument_names);
 
   // Pops function type arguments, instantiator type arguments, dst_type, and
   // value; and type checks value against the type arguments.

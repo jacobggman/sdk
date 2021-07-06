@@ -185,6 +185,68 @@ const Slot& Slot::GetNativeSlot(Kind kind) {
   return native_fields_.load()[static_cast<uint8_t>(kind)];
 }
 
+bool Slot::IsImmutableLengthSlot() const {
+  switch (kind()) {
+    case Slot::Kind::kArray_length:
+    case Slot::Kind::kTypedDataBase_length:
+    case Slot::Kind::kString_length:
+    case Slot::Kind::kTypeArguments_length:
+      return true;
+    case Slot::Kind::kGrowableObjectArray_length:
+      return false;
+
+      // Not length loads.
+#define UNBOXED_NATIVE_SLOT_CASE(Class, Untagged, Field, Rep, IsFinal)         \
+  case Slot::Kind::k##Class##_##Field:
+      UNBOXED_NATIVE_SLOTS_LIST(UNBOXED_NATIVE_SLOT_CASE)
+#undef UNBOXED_NATIVE_SLOT_CASE
+    case Slot::Kind::kLinkedHashMap_index:
+    case Slot::Kind::kLinkedHashMap_data:
+    case Slot::Kind::kLinkedHashMap_hash_mask:
+    case Slot::Kind::kLinkedHashMap_used_data:
+    case Slot::Kind::kLinkedHashMap_deleted_keys:
+    case Slot::Kind::kArgumentsDescriptor_type_args_len:
+    case Slot::Kind::kArgumentsDescriptor_positional_count:
+    case Slot::Kind::kArgumentsDescriptor_count:
+    case Slot::Kind::kArgumentsDescriptor_size:
+    case Slot::Kind::kArrayElement:
+    case Slot::Kind::kTypeArguments:
+    case Slot::Kind::kTypedDataView_offset_in_bytes:
+    case Slot::Kind::kTypedDataView_data:
+    case Slot::Kind::kGrowableObjectArray_data:
+    case Slot::Kind::kArray_type_arguments:
+    case Slot::Kind::kContext_parent:
+    case Slot::Kind::kClosure_context:
+    case Slot::Kind::kClosure_delayed_type_arguments:
+    case Slot::Kind::kClosure_function:
+    case Slot::Kind::kClosure_function_type_arguments:
+    case Slot::Kind::kClosure_instantiator_type_arguments:
+    case Slot::Kind::kClosure_hash:
+    case Slot::Kind::kCapturedVariable:
+    case Slot::Kind::kDartField:
+    case Slot::Kind::kFunction_data:
+    case Slot::Kind::kFunction_signature:
+    case Slot::Kind::kFunctionType_named_parameter_names:
+    case Slot::Kind::kFunctionType_parameter_types:
+    case Slot::Kind::kFunctionType_type_parameters:
+    case Slot::Kind::kPointerBase_data_field:
+    case Slot::Kind::kType_arguments:
+    case Slot::Kind::kTypeArgumentsIndex:
+    case Slot::Kind::kTypeParameters_names:
+    case Slot::Kind::kTypeParameters_flags:
+    case Slot::Kind::kTypeParameters_bounds:
+    case Slot::Kind::kTypeParameters_defaults:
+    case Slot::Kind::kTypeParameter_bound:
+    case Slot::Kind::kUnhandledException_exception:
+    case Slot::Kind::kUnhandledException_stacktrace:
+    case Slot::Kind::kWeakProperty_key:
+    case Slot::Kind::kWeakProperty_value:
+      return false;
+  }
+  UNREACHABLE();
+  return false;
+}
+
 // Note: should only be called with cids of array-like classes.
 const Slot& Slot::GetLengthFieldForArrayCid(intptr_t array_cid) {
   if (IsExternalTypedDataClassId(array_cid) || IsTypedDataClassId(array_cid) ||
@@ -215,6 +277,9 @@ const Slot& Slot::GetLengthFieldForArrayCid(intptr_t array_cid) {
 }
 
 const Slot& Slot::GetTypeArgumentsSlotFor(Thread* thread, const Class& cls) {
+  if (cls.id() == kArrayCid || cls.id() == kImmutableArrayCid) {
+    return Slot::Array_type_arguments();
+  }
   const intptr_t offset =
       compiler::target::Class::TypeArgumentsFieldOffset(cls);
   ASSERT(offset != Class::kNoTypeArguments);
@@ -234,7 +299,8 @@ const Slot& Slot::GetContextVariableSlotFor(Thread* thread,
       Slot(Kind::kCapturedVariable,
            IsImmutableBit::encode(variable.is_final() && !variable.is_late()) |
                IsNullableBit::encode(true) |
-               IsCompressedBit::encode(Context::ContainsCompressedPointers()),
+               IsCompressedBit::encode(Context::ContainsCompressedPointers()) |
+               IsSentinelVisibleBit::encode(variable.is_late()),
            kDynamicCid,
            compiler::target::Context::variable_offset(variable.index().value()),
            &variable.name(), &variable.type(), kTagged));
@@ -317,16 +383,18 @@ const Slot& Slot::Get(const Field& field,
   }
 
   Class& owner = Class::Handle(zone, field.Owner());
-  const Slot& slot = SlotCache::Instance(thread).Canonicalize(
-      Slot(Kind::kDartField,
-           IsImmutableBit::encode((field.is_final() && !field.is_late()) ||
-                                  field.is_const()) |
-               IsNullableBit::encode(is_nullable) |
-               IsGuardedBit::encode(used_guarded_state) |
-               IsCompressedBit::encode(
-                   compiler::target::Class::HasCompressedPointers(owner)),
-           nullable_cid, compiler::target::Field::OffsetOf(field), &field,
-           &type, rep));
+  const Slot& slot = SlotCache::Instance(thread).Canonicalize(Slot(
+      Kind::kDartField,
+      IsImmutableBit::encode((field.is_final() && !field.is_late()) ||
+                             field.is_const()) |
+          IsNullableBit::encode(is_nullable) |
+          IsGuardedBit::encode(used_guarded_state) |
+          IsCompressedBit::encode(
+              compiler::target::Class::HasCompressedPointers(owner)) |
+          IsSentinelVisibleBit::encode(field.is_late() && field.is_final() &&
+                                       !field.has_initializer()),
+      nullable_cid, compiler::target::Field::OffsetOf(field), &field, &type,
+      rep));
 
   // If properties of this slot were based on the guarded state make sure
   // to add the field to the list of guarded fields. Note that during background
@@ -387,7 +455,7 @@ CompileType Slot::ComputeCompileType() const {
       break;
   }
 
-  return CompileType(is_nullable(), nullable_cid(),
+  return CompileType(is_nullable(), is_sentinel_visible(), nullable_cid(),
                      nullable_cid() == kDynamicCid ? static_type_ : nullptr);
 }
 

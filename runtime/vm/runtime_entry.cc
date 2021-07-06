@@ -627,16 +627,19 @@ DEFINE_RUNTIME_ENTRY(SubtypeCheck, 5) {
   UNREACHABLE();
 }
 
-// Allocate a new closure and initializes its function field with the argument
-// and all other fields to null.
+// Allocate a new closure and initializes its function and context fields with
+// the arguments and all other fields to null.
+// Arg0: function.
+// Arg1: context.
 // Return value: newly allocated closure.
-DEFINE_RUNTIME_ENTRY(AllocateClosure, 1) {
+DEFINE_RUNTIME_ENTRY(AllocateClosure, 2) {
   const auto& function = Function::CheckedHandle(zone, arguments.ArgAt(0));
+  const auto& context = Context::CheckedHandle(zone, arguments.ArgAt(1));
   const Closure& closure = Closure::Handle(
-      zone, Closure::New(
-                Object::null_type_arguments(), Object::null_type_arguments(),
-                Object::null_type_arguments(), function,
-                Context::Handle(Context::null()), SpaceForRuntimeAllocation()));
+      zone,
+      Closure::New(Object::null_type_arguments(), Object::null_type_arguments(),
+                   Object::null_type_arguments(), function, context,
+                   SpaceForRuntimeAllocation()));
   arguments.SetReturn(closure);
 }
 
@@ -736,6 +739,9 @@ static void UpdateTypeTestCache(
     const Bool& result,
     const SubtypeTestCache& new_cache) {
   ASSERT(!new_cache.IsNull());
+  ASSERT(destination_type.IsCanonical());
+  ASSERT(instantiator_type_arguments.IsCanonical());
+  ASSERT(function_type_arguments.IsCanonical());
   Class& instance_class = Class::Handle(zone);
   if (instance.IsSmi()) {
     instance_class = Smi::Class();
@@ -745,23 +751,26 @@ static void UpdateTypeTestCache(
   // If the type is uninstantiated and refers to parent function type
   // parameters, the function_type_arguments have been canonicalized
   // when concatenated.
-  ASSERT(function_type_arguments.IsNull() ||
-         function_type_arguments.IsCanonical());
-  auto& instance_class_id_or_function = Object::Handle(zone);
+  auto& instance_class_id_or_signature = Object::Handle(zone);
   auto& instance_type_arguments = TypeArguments::Handle(zone);
   auto& instance_parent_function_type_arguments = TypeArguments::Handle(zone);
   auto& instance_delayed_type_arguments = TypeArguments::Handle(zone);
   if (instance_class.IsClosureClass()) {
     const auto& closure = Closure::Cast(instance);
     const auto& closure_function = Function::Handle(zone, closure.function());
-    instance_class_id_or_function = closure_function.ptr();
+    instance_class_id_or_signature = closure_function.signature();
     instance_type_arguments = closure.instantiator_type_arguments();
     instance_parent_function_type_arguments = closure.function_type_arguments();
     instance_delayed_type_arguments = closure.delayed_type_arguments();
+    ASSERT(instance_class_id_or_signature.IsCanonical());
+    ASSERT(instance_type_arguments.IsCanonical());
+    ASSERT(instance_parent_function_type_arguments.IsCanonical());
+    ASSERT(instance_delayed_type_arguments.IsCanonical());
   } else {
-    instance_class_id_or_function = Smi::New(instance_class.id());
+    instance_class_id_or_signature = Smi::New(instance_class.id());
     if (instance_class.NumTypeArguments() > 0) {
       instance_type_arguments = instance.GetTypeArguments();
+      ASSERT(instance_type_arguments.IsCanonical());
     }
   }
   if (FLAG_trace_type_checks) {
@@ -780,7 +789,7 @@ static void UpdateTypeTestCache(
     buffer.Printf(
         "    raw entry: [ %#" Px ", %#" Px ", %#" Px ", %#" Px ", %#" Px
         ", %#" Px ", %#" Px ", %#" Px " ]\n",
-        static_cast<uword>(instance_class_id_or_function.ptr()),
+        static_cast<uword>(instance_class_id_or_signature.ptr()),
         static_cast<uword>(destination_type.ptr()),
         static_cast<uword>(instance_type_arguments.ptr()),
         static_cast<uword>(instantiator_type_arguments.ptr()),
@@ -803,20 +812,10 @@ static void UpdateTypeTestCache(
       }
       return;
     }
-    ASSERT(instance_type_arguments.IsNull() ||
-           instance_type_arguments.IsCanonical());
-    ASSERT(instantiator_type_arguments.IsNull() ||
-           instantiator_type_arguments.IsCanonical());
-    ASSERT(function_type_arguments.IsNull() ||
-           function_type_arguments.IsCanonical());
-    ASSERT(instance_parent_function_type_arguments.IsNull() ||
-           instance_parent_function_type_arguments.IsCanonical());
-    ASSERT(instance_delayed_type_arguments.IsNull() ||
-           instance_delayed_type_arguments.IsCanonical());
     intptr_t colliding_index = -1;
     auto& old_result = Bool::Handle(zone);
     if (new_cache.HasCheck(
-            instance_class_id_or_function, destination_type,
+            instance_class_id_or_signature, destination_type,
             instance_type_arguments, instantiator_type_arguments,
             function_type_arguments, instance_parent_function_type_arguments,
             instance_delayed_type_arguments, &colliding_index, &old_result)) {
@@ -839,7 +838,7 @@ static void UpdateTypeTestCache(
       // found missing and now.
       return;
     }
-    new_cache.AddCheck(instance_class_id_or_function, destination_type,
+    new_cache.AddCheck(instance_class_id_or_signature, destination_type,
                        instance_type_arguments, instantiator_type_arguments,
                        function_type_arguments,
                        instance_parent_function_type_arguments,
@@ -3609,7 +3608,7 @@ static Thread* GetThreadForNativeCallback(uword callback_id,
   return thread;
 }
 
-#if defined(HOST_OS_WINDOWS)
+#if defined(DART_HOST_OS_WINDOWS)
 #pragma intrinsic(_ReturnAddress)
 #endif
 
@@ -3620,7 +3619,7 @@ static Thread* GetThreadForNativeCallback(uword callback_id,
 extern "C" Thread* DLRT_GetThreadForNativeCallback(uword callback_id) {
   CHECK_STACK_ALIGNMENT;
   TRACE_RUNTIME_CALL("GetThreadForNativeCallback %" Pd, callback_id);
-#if defined(HOST_OS_WINDOWS)
+#if defined(DART_HOST_OS_WINDOWS)
   void* return_address = _ReturnAddress();
 #else
   void* return_address = __builtin_return_address(0);
@@ -3675,6 +3674,8 @@ extern "C" LocalHandle* DLRT_AllocateHandle(ApiLocalScope* scope) {
   CHECK_STACK_ALIGNMENT;
   TRACE_RUNTIME_CALL("AllocateHandle %p", scope);
   LocalHandle* return_value = scope->local_handles()->AllocateHandle();
+  // Don't return an uninitialised handle.
+  return_value->set_ptr(Object::sentinel().ptr());
   TRACE_RUNTIME_CALL("AllocateHandle returning %p", return_value);
   return return_value;
 }

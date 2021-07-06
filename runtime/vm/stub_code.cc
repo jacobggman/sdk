@@ -35,6 +35,7 @@ StubCode::StubCodeEntry StubCode::entries_[kNumStubEntries] = {
     VM_STUB_CODE_LIST(STUB_CODE_DECLARE)
 #undef STUB_CODE_DECLARE
 };
+AcqRelAtomic<bool> StubCode::initialized_ = {false};
 
 #if defined(DART_PRECOMPILED_RUNTIME)
 void StubCode::Init() {
@@ -60,6 +61,8 @@ void StubCode::Init() {
   for (size_t i = 0; i < ARRAY_SIZE(entries_); i++) {
     entries_[i].code->set_object_pool(object_pool.ptr());
   }
+
+  InitializationDone();
 
 #if defined(DART_PRECOMPILER)
   {
@@ -111,14 +114,11 @@ CodePtr StubCode::Generate(
 #endif  // defined(DART_PRECOMPILED_RUNTIME)
 
 void StubCode::Cleanup() {
+  initialized_.store(false, std::memory_order_release);
+
   for (size_t i = 0; i < ARRAY_SIZE(entries_); i++) {
     entries_[i].code = nullptr;
   }
-}
-
-bool StubCode::HasBeenInitialized() {
-  // Use AsynchronousGapMarker as canary.
-  return entries_[kAsynchronousGapMarkerIndex].code != nullptr;
 }
 
 bool StubCode::InInvocationStub(uword pc) {
@@ -306,11 +306,10 @@ CodePtr StubCode::GetBuildMethodExtractorStub(
   auto Z = thread->zone();
   auto object_store = thread->isolate_group()->object_store();
 
-  const auto& closure_class =
-      Class::ZoneHandle(Z, object_store->closure_class());
   const auto& closure_allocation_stub =
-      Code::ZoneHandle(Z, StubCode::GetAllocationStubForClass(closure_class));
-  const auto& context_allocation_stub = StubCode::AllocateContext();
+      Code::ZoneHandle(Z, object_store->allocate_closure_stub());
+  const auto& context_allocation_stub =
+      Code::ZoneHandle(Z, object_store->allocate_context_stub());
 
   compiler::ObjectPoolBuilder object_pool_builder;
   compiler::Assembler assembler(pool != nullptr ? pool : &object_pool_builder);

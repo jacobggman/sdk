@@ -5,9 +5,12 @@
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/dart/element/element.dart';
+import 'package:analyzer/dart/element/type.dart';
 import 'package:analyzer/src/dart/ast/ast.dart';
 import 'package:analyzer/src/dart/ast/ast_factory.dart';
 import 'package:analyzer/src/dart/ast/token.dart';
+import 'package:analyzer/src/dart/element/element.dart';
+import 'package:analyzer/src/dart/element/type.dart';
 import 'package:analyzer/src/generated/testing/ast_test_factory.dart';
 import 'package:analyzer/src/generated/testing/token_factory.dart';
 import 'package:analyzer/src/generated/utilities_dart.dart';
@@ -15,6 +18,7 @@ import 'package:analyzer/src/summary2/ast_binary_flags.dart';
 import 'package:analyzer/src/summary2/ast_binary_tag.dart';
 import 'package:analyzer/src/summary2/ast_binary_tokens.dart';
 import 'package:analyzer/src/summary2/bundle_reader.dart';
+import 'package:analyzer/src/summary2/not_serializable_nodes.dart';
 import 'package:analyzer/src/summary2/unlinked_token_type.dart';
 import 'package:collection/collection.dart';
 
@@ -77,7 +81,7 @@ class AstBinaryReader {
         return _readFieldFormalParameter();
       case Tag.FormalParameterList:
         return _readFormalParameterList();
-      case Tag.FunctionExpression:
+      case Tag.FunctionExpressionStub:
         return _readFunctionExpression();
       case Tag.FunctionExpressionInvocation:
         return _readFunctionExpressionInvocation();
@@ -170,37 +174,20 @@ class AstBinaryReader {
     }
   }
 
-  IntegerLiteral _createIntegerLiteral(int value) {
-    // TODO(scheglov) Write token?
+  IntegerLiteral _createIntegerLiteral(String lexeme, int value) {
     var node = astFactory.integerLiteral(
-      TokenFactory.tokenFromTypeAndString(TokenType.INT, '$value'),
+      TokenFactory.tokenFromTypeAndString(TokenType.INT, lexeme),
       value,
     );
     _readExpressionResolution(node);
     return node;
   }
 
-  FunctionBody _functionBodyForFlags(int flags) {
-    if (AstBinaryFlags.isNative(flags)) {
-      return AstTestFactory.nativeFunctionBody('');
-    } else if (AstBinaryFlags.isAbstract(flags)) {
-      return AstTestFactory.emptyFunctionBody();
-    } else {
-      return astFactory.blockFunctionBody(
-        AstBinaryFlags.isAsync(flags) ? Tokens.ASYNC : null,
-        AstBinaryFlags.isGenerator(flags) ? Tokens.STAR : null,
-        astFactory.block(
-          Tokens.OPEN_CURLY_BRACKET,
-          const <Statement>[],
-          Tokens.CLOSE_CURLY_BRACKET,
-        ),
-      );
-    }
-  }
-
   AdjacentStrings _readAdjacentStrings() {
     var components = _readNodeList<StringLiteral>();
-    return astFactory.adjacentStrings(components);
+    var node = astFactory.adjacentStrings(components);
+    _readExpressionResolution(node);
+    return node;
   }
 
   Annotation _readAnnotation() {
@@ -209,10 +196,10 @@ class AstBinaryReader {
     var constructorName = _readOptionalNode() as SimpleIdentifier?;
     var arguments = _readOptionalNode() as ArgumentList?;
     var node = astFactory.annotation(
-      atSign: Tokens.AT,
+      atSign: Tokens.at(),
       name: name,
       typeArguments: typeArguments,
-      period: Tokens.PERIOD,
+      period: Tokens.period(),
       constructorName: constructorName,
       arguments: arguments,
     );
@@ -224,16 +211,16 @@ class AstBinaryReader {
     var arguments = _readNodeList<Expression>();
 
     return astFactory.argumentList(
-      Tokens.OPEN_PAREN,
+      Tokens.openParenthesis(),
       arguments,
-      Tokens.CLOSE_PAREN,
+      Tokens.closeParenthesis(),
     );
   }
 
   AsExpression _readAsExpression() {
     var expression = readNode() as Expression;
     var type = readNode() as TypeAnnotation;
-    var node = astFactory.asExpression(expression, Tokens.AS, type);
+    var node = astFactory.asExpression(expression, Tokens.as_(), type);
     _readExpressionResolution(node);
     return node;
   }
@@ -242,12 +229,12 @@ class AstBinaryReader {
     var condition = readNode() as Expression;
     var message = _readOptionalNode() as Expression?;
     return astFactory.assertInitializer(
-      Tokens.ASSERT,
-      Tokens.OPEN_PAREN,
+      Tokens.assert_(),
+      Tokens.openParenthesis(),
       condition,
-      Tokens.COMMA,
+      Tokens.comma(),
       message,
-      Tokens.CLOSE_PAREN,
+      Tokens.closeParenthesis(),
     );
   }
 
@@ -271,7 +258,7 @@ class AstBinaryReader {
 
   AwaitExpression _readAwaitExpression() {
     var expression = readNode() as Expression;
-    return astFactory.awaitExpression(Tokens.AWAIT, expression);
+    return astFactory.awaitExpression(Tokens.await_(), expression);
   }
 
   BinaryExpression _readBinaryExpression() {
@@ -284,6 +271,7 @@ class AstBinaryReader {
       rightOperand,
     );
     node.staticElement = _reader.readElement() as MethodElement?;
+    node.staticInvokeType = _reader.readOptionalFunctionType();
     _readExpressionResolution(node);
     return node;
   }
@@ -313,9 +301,9 @@ class AstBinaryReader {
     var elseExpression = readNode() as Expression;
     var node = astFactory.conditionalExpression(
       condition,
-      Tokens.QUESTION,
+      Tokens.question(),
       thenExpression,
-      Tokens.COLON,
+      Tokens.colon(),
       elseExpression,
     );
     _readExpressionResolution(node);
@@ -328,10 +316,10 @@ class AstBinaryReader {
     var expression = readNode() as Expression;
     var hasThis = AstBinaryFlags.hasThis(flags);
     return astFactory.constructorFieldInitializer(
-      hasThis ? Tokens.THIS : null,
-      hasThis ? Tokens.PERIOD : null,
+      hasThis ? Tokens.this_() : null,
+      hasThis ? Tokens.period() : null,
       fieldName,
-      Tokens.EQ,
+      Tokens.eq(),
       expression,
     );
   }
@@ -342,19 +330,18 @@ class AstBinaryReader {
 
     var node = astFactory.constructorName(
       type,
-      name != null ? Tokens.PERIOD : null,
+      name != null ? Tokens.period() : null,
       name,
     );
     node.staticElement = _reader.readElement() as ConstructorElement?;
     return node;
   }
 
-  SimpleIdentifier _readDeclarationName() {
+  SimpleIdentifierImpl _readDeclarationName() {
     var name = _reader.readStringReference();
-    var node = astFactory.simpleIdentifier(
+    return astFactory.simpleIdentifier(
       StringToken(TokenType.STRING, name, -1),
     );
-    return node;
   }
 
   DeclaredIdentifier _readDeclaredIdentifier() {
@@ -367,11 +354,11 @@ class AstBinaryReader {
       metadata,
       Tokens.choose(
         AstBinaryFlags.isConst(flags),
-        Tokens.CONST,
+        Tokens.const_(),
         AstBinaryFlags.isFinal(flags),
-        Tokens.FINAL,
+        Tokens.final_(),
         AstBinaryFlags.isVar(flags),
-        Tokens.VAR,
+        Tokens.var_(),
       ),
       type,
       identifier,
@@ -397,9 +384,21 @@ class AstBinaryReader {
     var node = astFactory.defaultFormalParameter(
       parameter,
       kind,
-      AstBinaryFlags.hasInitializer(flags) ? Tokens.COLON : null,
+      AstBinaryFlags.hasInitializer(flags) ? Tokens.colon() : null,
       defaultValue,
     );
+
+    var nonDefaultElement = parameter.declaredElement!;
+    var element = DefaultParameterElementImpl(
+      nonDefaultElement.name,
+      nonDefaultElement.nameOffset,
+    );
+    element.parameterKind = kind;
+    if (parameter is SimpleFormalParameterImpl) {
+      parameter.declaredElement = element;
+    }
+    node.identifier?.staticElement = element;
+    element.type = nonDefaultElement.type;
 
     return node;
   }
@@ -442,26 +441,26 @@ class AstBinaryReader {
     var identifier = readNode() as SimpleIdentifier;
     var node = astFactory.fieldFormalParameter2(
       identifier: identifier,
-      period: Tokens.PERIOD,
-      thisKeyword: Tokens.THIS,
+      period: Tokens.period(),
+      thisKeyword: Tokens.this_(),
       covariantKeyword:
-          AstBinaryFlags.isCovariant(flags) ? Tokens.COVARIANT : null,
+          AstBinaryFlags.isCovariant(flags) ? Tokens.covariant_() : null,
       typeParameters: typeParameters,
       keyword: Tokens.choose(
         AstBinaryFlags.isConst(flags),
-        Tokens.CONST,
+        Tokens.const_(),
         AstBinaryFlags.isFinal(flags),
-        Tokens.FINAL,
+        Tokens.final_(),
         AstBinaryFlags.isVar(flags),
-        Tokens.VAR,
+        Tokens.var_(),
       ),
       metadata: metadata,
       comment: null,
       type: type,
       parameters: formalParameters,
-      question: AstBinaryFlags.hasQuestion(flags) ? Tokens.QUESTION : null,
+      question: AstBinaryFlags.hasQuestion(flags) ? Tokens.question() : null,
       requiredKeyword:
-          AstBinaryFlags.isRequired(flags) ? Tokens.REQUIRED : null,
+          AstBinaryFlags.isRequired(flags) ? Tokens.required_() : null,
     );
     return node;
   }
@@ -470,7 +469,7 @@ class AstBinaryReader {
     var loopVariable = readNode() as DeclaredIdentifier;
     var iterable = readNode() as Expression;
     return astFactory.forEachPartsWithDeclaration(
-      inKeyword: Tokens.IN,
+      inKeyword: Tokens.in_(),
       iterable: iterable,
       loopVariable: loopVariable,
     );
@@ -481,12 +480,12 @@ class AstBinaryReader {
     var forLoopParts = readNode() as ForLoopParts;
     var body = readNode() as CollectionElement;
     return astFactory.forElement(
-      awaitKeyword: AstBinaryFlags.hasAwait(flags) ? Tokens.AWAIT : null,
+      awaitKeyword: AstBinaryFlags.hasAwait(flags) ? Tokens.await_() : null,
       body: body,
-      forKeyword: Tokens.FOR,
+      forKeyword: Tokens.for_(),
       forLoopParts: forLoopParts,
-      leftParenthesis: Tokens.OPEN_PAREN,
-      rightParenthesis: Tokens.CLOSE_PAREN,
+      leftParenthesis: Tokens.openParenthesis(),
+      rightParenthesis: Tokens.closeParenthesis(),
     );
   }
 
@@ -495,21 +494,21 @@ class AstBinaryReader {
     var parameters = _readNodeList<FormalParameter>();
 
     return astFactory.formalParameterList(
-      Tokens.OPEN_PAREN,
+      Tokens.openParenthesis(),
       parameters,
       Tokens.choose(
         AstBinaryFlags.isDelimiterCurly(flags),
-        Tokens.OPEN_CURLY_BRACKET,
+        Tokens.openCurlyBracket(),
         AstBinaryFlags.isDelimiterSquare(flags),
-        Tokens.OPEN_SQUARE_BRACKET,
+        Tokens.openSquareBracket(),
       ),
       Tokens.choose(
         AstBinaryFlags.isDelimiterCurly(flags),
-        Tokens.CLOSE_CURLY_BRACKET,
+        Tokens.closeCurlyBracket(),
         AstBinaryFlags.isDelimiterSquare(flags),
-        Tokens.CLOSE_SQUARE_BRACKET,
+        Tokens.closeSquareBracket(),
       ),
-      Tokens.CLOSE_PAREN,
+      Tokens.closeParenthesis(),
     );
   }
 
@@ -519,8 +518,8 @@ class AstBinaryReader {
     var updaters = _readNodeList<Expression>();
     return astFactory.forPartsWithDeclarations(
       condition: condition,
-      leftSeparator: Tokens.SEMICOLON,
-      rightSeparator: Tokens.SEMICOLON,
+      leftSeparator: Tokens.semicolon(),
+      rightSeparator: Tokens.semicolon(),
       updaters: updaters,
       variables: variables,
     );
@@ -533,23 +532,14 @@ class AstBinaryReader {
     return astFactory.forPartsWithExpression(
       condition: condition,
       initialization: initialization,
-      leftSeparator: Tokens.SEMICOLON,
-      rightSeparator: Tokens.SEMICOLON,
+      leftSeparator: Tokens.semicolon(),
+      rightSeparator: Tokens.semicolon(),
       updaters: updaters,
     );
   }
 
   FunctionExpression _readFunctionExpression() {
-    var flags = _readByte();
-    var typeParameters = _readOptionalNode() as TypeParameterList?;
-    var formalParameters = _readOptionalNode() as FormalParameterList?;
-    var body = _functionBodyForFlags(flags);
-
-    return astFactory.functionExpression(
-      typeParameters,
-      formalParameters,
-      body,
-    );
+    return emptyFunctionExpression();
   }
 
   FunctionExpressionInvocation _readFunctionExpressionInvocation() {
@@ -561,7 +551,7 @@ class AstBinaryReader {
       typeArguments,
       arguments,
     );
-    _readExpressionResolution(node);
+    _readInvocationExpression(node);
     return node;
   }
 
@@ -575,12 +565,12 @@ class AstBinaryReader {
     var node = astFactory.functionTypedFormalParameter2(
       comment: null,
       covariantKeyword:
-          AstBinaryFlags.isCovariant(flags) ? Tokens.COVARIANT : null,
+          AstBinaryFlags.isCovariant(flags) ? Tokens.covariant_() : null,
       identifier: identifier,
       metadata: metadata,
       parameters: formalParameters,
       requiredKeyword:
-          AstBinaryFlags.isRequired(flags) ? Tokens.REQUIRED : null,
+          AstBinaryFlags.isRequired(flags) ? Tokens.required_() : null,
       returnType: returnType,
       typeParameters: typeParameters,
     );
@@ -595,12 +585,22 @@ class AstBinaryReader {
     var formalParameters = readNode() as FormalParameterList;
     var node = astFactory.genericFunctionType(
       returnType,
-      Tokens.FUNCTION,
+      Tokens.function(),
       typeParameters,
       formalParameters,
-      question: AstBinaryFlags.hasQuestion(flags) ? Tokens.QUESTION : null,
+      question: AstBinaryFlags.hasQuestion(flags) ? Tokens.question() : null,
     );
-    node.type = _reader.readType();
+    var type = _reader.readRequiredType() as FunctionType;
+    node.type = type;
+
+    var element = GenericFunctionTypeElementImpl.forOffset(-1);
+    element.parameters = formalParameters.parameters
+        .map((parameter) => parameter.declaredElement!)
+        .toList();
+    element.returnType = returnType?.type ?? DynamicTypeImpl.instance;
+    element.type = type;
+    node.declaredElement = element;
+
     return node;
   }
 
@@ -611,10 +611,10 @@ class AstBinaryReader {
     return astFactory.ifElement(
       condition: condition,
       elseElement: elseElement,
-      elseKeyword: elseElement != null ? Tokens.ELSE : null,
-      ifKeyword: Tokens.IF,
-      leftParenthesis: Tokens.OPEN_PAREN,
-      rightParenthesis: Tokens.CLOSE_PAREN,
+      elseKeyword: elseElement != null ? Tokens.else_() : null,
+      ifKeyword: Tokens.if_(),
+      leftParenthesis: Tokens.openParenthesis(),
+      rightParenthesis: Tokens.closeParenthesis(),
       thenElement: thenElement,
     );
   }
@@ -628,20 +628,20 @@ class AstBinaryReader {
     if (target != null) {
       node = (astFactory.indexExpressionForTarget2(
         target: target,
-        question: AstBinaryFlags.hasQuestion(flags) ? Tokens.QUESTION : null,
-        leftBracket: Tokens.OPEN_SQUARE_BRACKET,
+        question: AstBinaryFlags.hasQuestion(flags) ? Tokens.question() : null,
+        leftBracket: Tokens.openSquareBracket(),
         index: index,
-        rightBracket: Tokens.CLOSE_SQUARE_BRACKET,
+        rightBracket: Tokens.closeSquareBracket(),
       ))
         ..period =
-            AstBinaryFlags.hasPeriod(flags) ? Tokens.PERIOD_PERIOD : null;
+            AstBinaryFlags.hasPeriod(flags) ? Tokens.periodPeriod() : null;
     } else {
       node = astFactory.indexExpressionForCascade2(
-        period: Tokens.PERIOD_PERIOD,
-        question: AstBinaryFlags.hasQuestion(flags) ? Tokens.QUESTION : null,
-        leftBracket: Tokens.OPEN_SQUARE_BRACKET,
+        period: Tokens.periodPeriod(),
+        question: AstBinaryFlags.hasQuestion(flags) ? Tokens.question() : null,
+        leftBracket: Tokens.openSquareBracket(),
         index: index,
-        rightBracket: Tokens.CLOSE_SQUARE_BRACKET,
+        rightBracket: Tokens.closeSquareBracket(),
       );
     }
     node.staticElement = _reader.readElement() as MethodElement?;
@@ -657,9 +657,9 @@ class AstBinaryReader {
     var node = astFactory.instanceCreationExpression(
       Tokens.choose(
         AstBinaryFlags.isConst(flags),
-        Tokens.CONST,
+        Tokens.const_(),
         AstBinaryFlags.isNew(flags),
-        Tokens.NEW,
+        Tokens.new_(),
       ),
       constructorName,
       argumentList,
@@ -673,13 +673,15 @@ class AstBinaryReader {
   }
 
   IntegerLiteral _readIntegerLiteralNegative() {
+    var lexeme = _readStringReference();
     var value = (_readUInt32() << 32) | _readUInt32();
-    return _createIntegerLiteral(-value);
+    return _createIntegerLiteral(lexeme, -value);
   }
 
   IntegerLiteral _readIntegerLiteralNegative1() {
+    var lexeme = _readStringReference();
     var value = _readByte();
-    return _createIntegerLiteral(-value);
+    return _createIntegerLiteral(lexeme, -value);
   }
 
   IntegerLiteral _readIntegerLiteralNull() {
@@ -693,13 +695,15 @@ class AstBinaryReader {
   }
 
   IntegerLiteral _readIntegerLiteralPositive() {
+    var lexeme = _readStringReference();
     var value = (_readUInt32() << 32) | _readUInt32();
-    return _createIntegerLiteral(value);
+    return _createIntegerLiteral(lexeme, value);
   }
 
   IntegerLiteral _readIntegerLiteralPositive1() {
+    var lexeme = _readStringReference();
     var value = _readByte();
-    return _createIntegerLiteral(value);
+    return _createIntegerLiteral(lexeme, value);
   }
 
   InterpolationExpression _readInterpolationExpression() {
@@ -708,24 +712,25 @@ class AstBinaryReader {
     var isIdentifier = AstBinaryFlags.isStringInterpolationIdentifier(flags);
     return astFactory.interpolationExpression(
       isIdentifier
-          ? Tokens.OPEN_CURLY_BRACKET
-          : Tokens.STRING_INTERPOLATION_EXPRESSION,
+          ? Tokens.openCurlyBracket()
+          : Tokens.stringInterpolationExpression(),
       expression,
-      isIdentifier ? null : Tokens.CLOSE_CURLY_BRACKET,
+      isIdentifier ? null : Tokens.closeCurlyBracket(),
     );
   }
 
   InterpolationString _readInterpolationString() {
+    var lexeme = _readStringReference();
     var value = _readStringReference();
     return astFactory.interpolationString(
-      TokenFactory.tokenFromString(value),
+      TokenFactory.tokenFromString(lexeme),
       value,
     );
   }
 
   void _readInvocationExpression(InvocationExpressionImpl node) {
-    // TODO(scheglov) typeArgumentTypes and staticInvokeType?
-    node.typeArgumentTypes = [];
+    node.staticInvokeType = _reader.readType();
+    node.typeArgumentTypes = _reader.readOptionalTypeList();
     _readExpressionResolution(node);
   }
 
@@ -735,8 +740,8 @@ class AstBinaryReader {
     var type = readNode() as TypeAnnotation;
     var node = astFactory.isExpression(
       expression,
-      Tokens.IS,
-      AstBinaryFlags.hasNot(flags) ? Tokens.BANG : null,
+      Tokens.is_(),
+      AstBinaryFlags.hasNot(flags) ? Tokens.bang() : null,
       type,
     );
     _readExpressionResolution(node);
@@ -749,11 +754,11 @@ class AstBinaryReader {
     var elements = _readNodeList<CollectionElement>();
 
     var node = astFactory.listLiteral(
-      AstBinaryFlags.isConst(flags) ? Tokens.CONST : null,
+      AstBinaryFlags.isConst(flags) ? Tokens.const_() : null,
       typeArguments,
-      Tokens.OPEN_SQUARE_BRACKET,
+      Tokens.openSquareBracket(),
       elements,
-      Tokens.CLOSE_SQUARE_BRACKET,
+      Tokens.closeSquareBracket(),
     );
     _readExpressionResolution(node);
     return node;
@@ -762,7 +767,7 @@ class AstBinaryReader {
   MapLiteralEntry _readMapLiteralEntry() {
     var key = readNode() as Expression;
     var value = readNode() as Expression;
-    return astFactory.mapLiteralEntry(key, Tokens.COLON, value);
+    return astFactory.mapLiteralEntry(key, Tokens.colon(), value);
   }
 
   MethodInvocation _readMethodInvocation() {
@@ -776,9 +781,9 @@ class AstBinaryReader {
       target,
       Tokens.choose(
         AstBinaryFlags.hasPeriod(flags),
-        Tokens.PERIOD,
+        Tokens.period(),
         AstBinaryFlags.hasPeriod2(flags),
-        Tokens.PERIOD_PERIOD,
+        Tokens.periodPeriod(),
       ),
       methodName,
       typeArguments,
@@ -798,14 +803,14 @@ class AstBinaryReader {
     var node = astFactory.mixinDeclaration(
       null,
       metadata,
-      Tokens.MIXIN,
+      Tokens.mixin_(),
       name,
       typeParameters,
       onClause,
       implementsClause,
-      Tokens.OPEN_CURLY_BRACKET,
+      Tokens.openCurlyBracket(),
       const <ClassMember>[],
-      Tokens.CLOSE_CURLY_BRACKET,
+      Tokens.closeCurlyBracket(),
     );
 
     return node;
@@ -817,7 +822,7 @@ class AstBinaryReader {
       astFactory.simpleIdentifier(
         StringToken(TokenType.STRING, name, -1),
       ),
-      Tokens.COLON,
+      Tokens.colon(),
     );
     var expression = readNode() as Expression;
     var node = astFactory.namedExpression(nameNode, expression);
@@ -831,9 +836,11 @@ class AstBinaryReader {
   }
 
   NullLiteral _readNullLiteral() {
-    return astFactory.nullLiteral(
-      Tokens.NULL,
+    var node = astFactory.nullLiteral(
+      Tokens.null_(),
     );
+    _readExpressionResolution(node);
+    return node;
   }
 
   AstNode? _readOptionalNode() {
@@ -858,9 +865,9 @@ class AstBinaryReader {
   ParenthesizedExpression _readParenthesizedExpression() {
     var expression = readNode() as Expression;
     var node = astFactory.parenthesizedExpression(
-      Tokens.OPEN_PAREN,
+      Tokens.openParenthesis(),
       expression,
-      Tokens.CLOSE_PAREN,
+      Tokens.closeParenthesis(),
     );
     _readExpressionResolution(node);
     return node;
@@ -889,7 +896,7 @@ class AstBinaryReader {
     var identifier = readNode() as SimpleIdentifier;
     var node = astFactory.prefixedIdentifier(
       prefix,
-      Tokens.PERIOD,
+      Tokens.period(),
       identifier,
     );
     _readExpressionResolution(node);
@@ -922,12 +929,12 @@ class AstBinaryReader {
     Token operator;
     if (AstBinaryFlags.hasQuestion(flags)) {
       operator = AstBinaryFlags.hasPeriod(flags)
-          ? Tokens.QUESTION_PERIOD
-          : Tokens.QUESTION_PERIOD_PERIOD;
+          ? Tokens.questionPeriod()
+          : Tokens.questionPeriodPeriod();
     } else {
       operator = AstBinaryFlags.hasPeriod(flags)
-          ? Tokens.PERIOD
-          : Tokens.PERIOD_PERIOD;
+          ? Tokens.period()
+          : Tokens.periodPeriod();
     }
 
     var node = astFactory.propertyAccess(target, operator, propertyName);
@@ -939,8 +946,8 @@ class AstBinaryReader {
     var constructorName = _readOptionalNode() as SimpleIdentifier?;
     var argumentList = readNode() as ArgumentList;
     var node = astFactory.redirectingConstructorInvocation(
-      Tokens.THIS,
-      constructorName != null ? Tokens.PERIOD : null,
+      Tokens.this_(),
+      constructorName != null ? Tokens.period() : null,
       constructorName,
       argumentList,
     );
@@ -955,11 +962,11 @@ class AstBinaryReader {
     var typeArguments = _readOptionalNode() as TypeArgumentList?;
     var elements = _readNodeList<CollectionElement>();
     var node = astFactory.setOrMapLiteral(
-      constKeyword: AstBinaryFlags.isConst(flags) ? Tokens.CONST : null,
+      constKeyword: AstBinaryFlags.isConst(flags) ? Tokens.const_() : null,
       elements: elements,
-      leftBracket: Tokens.OPEN_CURLY_BRACKET,
+      leftBracket: Tokens.openCurlyBracket(),
       typeArguments: typeArguments,
-      rightBracket: Tokens.CLOSE_CURLY_BRACKET,
+      rightBracket: Tokens.closeCurlyBracket(),
     );
 
     const isMapBit = 1 << 0;
@@ -985,22 +992,29 @@ class AstBinaryReader {
       identifier: identifier,
       type: type,
       covariantKeyword:
-          AstBinaryFlags.isCovariant(flags) ? Tokens.COVARIANT : null,
+          AstBinaryFlags.isCovariant(flags) ? Tokens.covariant_() : null,
       comment: null,
       metadata: metadata,
       keyword: Tokens.choose(
         AstBinaryFlags.isConst(flags),
-        Tokens.CONST,
+        Tokens.const_(),
         AstBinaryFlags.isFinal(flags),
-        Tokens.FINAL,
+        Tokens.final_(),
         AstBinaryFlags.isVar(flags),
-        Tokens.VAR,
+        Tokens.var_(),
       ),
       requiredKeyword:
-          AstBinaryFlags.isRequired(flags) ? Tokens.REQUIRED : null,
+          AstBinaryFlags.isRequired(flags) ? Tokens.required_() : null,
     );
-    _reader.readType(); // TODO(scheglov) actual type
+    var actualType = _reader.readRequiredType();
     _reader.readByte(); // TODO(scheglov) inherits covariant
+
+    var element = ParameterElementImpl(identifier?.name ?? '', -1);
+    element.parameterKind = node.kind;
+    element.type = actualType;
+    node.declaredElement = element;
+    identifier?.staticElement = element;
+
     return node;
   }
 
@@ -1018,10 +1032,12 @@ class AstBinaryReader {
     var lexeme = _readStringReference();
     var value = _readStringReference();
 
-    return astFactory.simpleStringLiteral(
+    var node = astFactory.simpleStringLiteral(
       TokenFactory.tokenFromString(lexeme),
       value,
     );
+    _readExpressionResolution(node);
+    return node;
   }
 
   SpreadElement _readSpreadElement() {
@@ -1029,15 +1045,17 @@ class AstBinaryReader {
     var expression = readNode() as Expression;
     return astFactory.spreadElement(
       spreadOperator: AstBinaryFlags.hasQuestion(flags)
-          ? Tokens.PERIOD_PERIOD_PERIOD_QUESTION
-          : Tokens.PERIOD_PERIOD_PERIOD,
+          ? Tokens.periodPeriodPeriodQuestion()
+          : Tokens.periodPeriodPeriod(),
       expression: expression,
     );
   }
 
   StringInterpolation _readStringInterpolation() {
     var elements = _readNodeList<InterpolationElement>();
-    return astFactory.stringInterpolation(elements);
+    var node = astFactory.stringInterpolation(elements);
+    _readExpressionResolution(node);
+    return node;
   }
 
   String _readStringReference() {
@@ -1048,8 +1066,8 @@ class AstBinaryReader {
     var constructorName = _readOptionalNode() as SimpleIdentifier?;
     var argumentList = readNode() as ArgumentList;
     var node = astFactory.superConstructorInvocation(
-      Tokens.SUPER,
-      Tokens.PERIOD,
+      Tokens.super_(),
+      constructorName != null ? Tokens.period() : null,
       constructorName,
       argumentList,
     );
@@ -1059,7 +1077,7 @@ class AstBinaryReader {
   }
 
   SuperExpression _readSuperExpression() {
-    var node = astFactory.superExpression(Tokens.SUPER);
+    var node = astFactory.superExpression(Tokens.super_());
     _readExpressionResolution(node);
     return node;
   }
@@ -1069,27 +1087,27 @@ class AstBinaryReader {
         .readStringReferenceList()
         .map(TokenFactory.tokenFromString)
         .toList();
-    var node = astFactory.symbolLiteral(Tokens.HASH, components);
+    var node = astFactory.symbolLiteral(Tokens.hash(), components);
     _readExpressionResolution(node);
     return node;
   }
 
   ThisExpression _readThisExpression() {
-    var node = astFactory.thisExpression(Tokens.THIS);
+    var node = astFactory.thisExpression(Tokens.this_());
     _readExpressionResolution(node);
     return node;
   }
 
   ThrowExpression _readThrowExpression() {
     var expression = readNode() as Expression;
-    var node = astFactory.throwExpression(Tokens.THROW, expression);
+    var node = astFactory.throwExpression(Tokens.throw_(), expression);
     _readExpressionResolution(node);
     return node;
   }
 
   TypeArgumentList _readTypeArgumentList() {
     var arguments = _readNodeList<TypeAnnotation>();
-    return astFactory.typeArgumentList(Tokens.LT, arguments, Tokens.GT);
+    return astFactory.typeArgumentList(Tokens.lt(), arguments, Tokens.gt());
   }
 
   TypeName _readTypeName() {
@@ -1100,7 +1118,7 @@ class AstBinaryReader {
     var node = astFactory.typeName(
       name,
       typeArguments,
-      question: AstBinaryFlags.hasQuestion(flags) ? Tokens.QUESTION : null,
+      question: AstBinaryFlags.hasQuestion(flags) ? Tokens.question() : null,
     );
     node.type = _reader.readType();
     return node;
@@ -1115,7 +1133,7 @@ class AstBinaryReader {
       null,
       metadata,
       name,
-      bound != null ? Tokens.EXTENDS : null,
+      bound != null ? Tokens.extends_() : null,
       bound,
     );
 
@@ -1125,9 +1143,9 @@ class AstBinaryReader {
   TypeParameterList _readTypeParameterList() {
     var typeParameters = _readNodeList<TypeParameter>();
     return astFactory.typeParameterList(
-      Tokens.LT,
+      Tokens.lt(),
       typeParameters,
-      Tokens.GT,
+      Tokens.gt(),
     );
   }
 
@@ -1142,7 +1160,7 @@ class AstBinaryReader {
 
     var node = astFactory.variableDeclaration(
       name,
-      Tokens.EQ,
+      Tokens.eq(),
       initializer,
     );
 
@@ -1161,13 +1179,13 @@ class AstBinaryReader {
       comment: null,
       keyword: Tokens.choose(
         AstBinaryFlags.isConst(flags),
-        Tokens.CONST,
+        Tokens.const_(),
         AstBinaryFlags.isFinal(flags),
-        Tokens.FINAL,
+        Tokens.final_(),
         AstBinaryFlags.isVar(flags),
-        Tokens.VAR,
+        Tokens.var_(),
       ),
-      lateKeyword: AstBinaryFlags.isLate(flags) ? Tokens.LATE : null,
+      lateKeyword: AstBinaryFlags.isLate(flags) ? Tokens.late_() : null,
       metadata: metadata,
       type: type,
       variables: variables,

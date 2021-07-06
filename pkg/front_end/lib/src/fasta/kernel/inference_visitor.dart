@@ -63,10 +63,35 @@ class InferenceVisitor
 
   InferenceVisitor(this.inferrer);
 
+  /// Computes uri and offset for [node] for internal errors in a way that is
+  /// safe for both top-level and full inference.
+  _UriOffset _computeUriOffset(TreeNode node) {
+    Uri uri;
+    int fileOffset;
+    if (!inferrer.isTopLevel) {
+      // In local inference we have access to the current file uri.
+      uri = inferrer.helper.uri;
+      fileOffset = node.fileOffset;
+    } else {
+      Location location = node.location;
+      if (location != null) {
+        // Use the location file uri, if available.
+        uri = location.file;
+        fileOffset = node.fileOffset;
+      } else {
+        // Otherwise use the library file uri with no offset.
+        uri = inferrer.library.fileUri;
+        fileOffset = TreeNode.noOffset;
+      }
+    }
+    return new _UriOffset(uri, fileOffset);
+  }
+
   ExpressionInferenceResult _unhandledExpression(
       Expression node, DartType typeContext) {
-    unhandled("${node.runtimeType}", "InferenceVisitor", node.fileOffset,
-        inferrer.helper.uri);
+    _UriOffset uriOffset = _computeUriOffset(node);
+    unhandled("${node.runtimeType}", "InferenceVisitor", uriOffset.fileOffset,
+        uriOffset.uri);
   }
 
   @override
@@ -190,8 +215,16 @@ class InferenceVisitor
   }
 
   @override
-  ExpressionInferenceResult visitInstantiation(
-      Instantiation node, DartType typeContext) {
+  ExpressionInferenceResult visitConstructorTearOff(
+      ConstructorTearOff node, DartType typeContext) {
+    DartType type = node.constructor.function
+        .computeFunctionType(inferrer.library.nonNullable);
+    return inferrer.instantiateTearOff(type, typeContext, node);
+  }
+
+  @override
+  ExpressionInferenceResult visitTypedefTearOff(
+      TypedefTearOff node, DartType typeContext) {
     return _unhandledExpression(node, typeContext);
   }
 
@@ -214,8 +247,9 @@ class InferenceVisitor
   }
 
   StatementInferenceResult _unhandledStatement(Statement node) {
-    return unhandled("${node.runtimeType}", "InferenceVisitor", node.fileOffset,
-        inferrer.helper.uri);
+    _UriOffset uriOffset = _computeUriOffset(node);
+    return unhandled("${node.runtimeType}", "InferenceVisitor",
+        uriOffset.fileOffset, uriOffset.uri);
   }
 
   @override
@@ -264,6 +298,63 @@ class InferenceVisitor
     // TODO(johnniwinther): The inferred type should be an InvalidType. Using
     // BottomType leads to cascading errors so we use DynamicType for now.
     return new ExpressionInferenceResult(const DynamicType(), node);
+  }
+
+  @override
+  ExpressionInferenceResult visitInstantiation(
+      Instantiation node, DartType typeContext) {
+    ExpressionInferenceResult operandResult = inferrer.inferExpression(
+        node.expression, const UnknownType(), true,
+        isVoidAllowed: true);
+    node.expression = operandResult.expression..parent = node;
+    DartType operandType = operandResult.inferredType;
+    Expression result = node;
+    DartType resultType = const InvalidType();
+    if (operandType is FunctionType) {
+      if (operandType.typeParameters.length == node.typeArguments.length) {
+        inferrer.checkBoundsInInstantiation(
+            operandType, node.typeArguments, node.fileOffset,
+            inferred: false);
+        resultType = Substitution.fromPairs(
+                operandType.typeParameters, node.typeArguments)
+            .substituteType(operandType.withoutTypeParameters);
+      } else {
+        if (!inferrer.isTopLevel) {
+          if (operandType.typeParameters.isEmpty) {
+            result = inferrer.helper.buildProblem(
+                templateInstantiationNonGenericFunctionType.withArguments(
+                    operandType, inferrer.isNonNullableByDefault),
+                node.fileOffset,
+                noLength);
+          } else if (operandType.typeParameters.length >
+              node.typeArguments.length) {
+            result = inferrer.helper.buildProblem(
+                templateInstantiationTooFewArguments.withArguments(
+                    operandType.typeParameters.length,
+                    node.typeArguments.length),
+                node.fileOffset,
+                noLength);
+          } else if (operandType.typeParameters.length <
+              node.typeArguments.length) {
+            result = inferrer.helper.buildProblem(
+                templateInstantiationTooManyArguments.withArguments(
+                    operandType.typeParameters.length,
+                    node.typeArguments.length),
+                node.fileOffset,
+                noLength);
+          }
+        }
+      }
+    } else {
+      if (!inferrer.isTopLevel) {
+        result = inferrer.helper.buildProblem(
+            templateInstantiationNonGenericFunctionType.withArguments(
+                operandType, inferrer.isNonNullableByDefault),
+            node.fileOffset,
+            noLength);
+      }
+    }
+    return new ExpressionInferenceResult(resultType, result);
   }
 
   @override
@@ -486,10 +577,8 @@ class InferenceVisitor
       ConstructorInvocation node, DartType typeContext) {
     inferrer.inferConstructorParameterTypes(node.target);
     bool hadExplicitTypeArguments = hasExplicitTypeArguments(node.arguments);
-    FunctionType functionType = replaceReturnType(
-        node.target.function
-            .computeThisFunctionType(inferrer.library.nonNullable),
-        computeConstructorReturnType(node.target, inferrer.coreTypes));
+    FunctionType functionType = node.target.function
+        .computeThisFunctionType(inferrer.library.nonNullable);
     InvocationInferenceResult result = inferrer.inferInvocation(
         typeContext, node.fileOffset, functionType, node.arguments,
         isConst: node.isConst, staticTarget: node.target);
@@ -775,10 +864,8 @@ class InferenceVisitor
       FactoryConstructorInvocationJudgment node, DartType typeContext) {
     bool hadExplicitTypeArguments = hasExplicitTypeArguments(node.arguments);
 
-    FunctionType functionType = replaceReturnType(
-        node.target.function
-            .computeThisFunctionType(inferrer.library.nonNullable),
-        computeConstructorReturnType(node.target, inferrer.coreTypes));
+    FunctionType functionType = node.target.function
+        .computeThisFunctionType(inferrer.library.nonNullable);
 
     InvocationInferenceResult result = inferrer.inferInvocation(
         typeContext, node.fileOffset, functionType, node.arguments,
@@ -985,11 +1072,12 @@ class InferenceVisitor
     } else if (syntheticAssignment is InvalidExpression || hasProblem) {
       return new InvalidForInVariable(syntheticAssignment);
     } else {
+      _UriOffset uriOffset = _computeUriOffset(syntheticAssignment);
       return unhandled(
           "${syntheticAssignment.runtimeType}",
           "handleForInStatementWithoutVariable",
-          syntheticAssignment.fileOffset,
-          inferrer.helper.uri);
+          uriOffset.fileOffset,
+          uriOffset.uri);
     }
   }
 
@@ -1364,9 +1452,11 @@ class InferenceVisitor
   }
 
   void visitShadowInvalidInitializer(ShadowInvalidInitializer node) {
-    inferrer.inferExpression(
+    ExpressionInferenceResult initializerResult = inferrer.inferExpression(
         node.variable.initializer, const UnknownType(), !inferrer.isTopLevel,
         isVoidAllowed: false);
+    node.variable.initializer = initializerResult.expression
+      ..parent = node.variable;
   }
 
   void visitShadowInvalidFieldInitializer(ShadowInvalidFieldInitializer node) {
@@ -1995,7 +2085,7 @@ class InferenceVisitor
                       entry,
                       (type) => !type.isPotentiallyNullable));
               _copyNonPromotionReasonToReplacement(entry, problem);
-              replacement = new SpreadMapEntry(problem, false)
+              replacement = new SpreadMapEntry(problem, isNullAware: false)
                 ..fileOffset = entry.fileOffset;
             }
 
@@ -7253,4 +7343,11 @@ class InvalidForInVariable implements ForInVariable {
   @override
   Expression inferAssignment(TypeInferrerImpl inferrer, DartType rhsType) =>
       expression;
+}
+
+class _UriOffset {
+  final Uri uri;
+  final int fileOffset;
+
+  _UriOffset(this.uri, this.fileOffset);
 }

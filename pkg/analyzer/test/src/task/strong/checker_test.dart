@@ -1790,111 +1790,6 @@ main() {
     ]);
   }
 
-  test_implicitDynamic_field() async {
-    _disableTestPackageImplicitDynamic();
-    await assertErrorsInCode(r'''
-class C {
-  var x0;
-  var x1 = (<dynamic>[])[0];
-  var x2, x3 = 42, x4;
-  dynamic y0;
-  dynamic y1 = (<dynamic>[])[0];
-}
-''', [
-      error(LanguageCode.IMPLICIT_DYNAMIC_FIELD, 16, 2),
-      error(LanguageCode.IMPLICIT_DYNAMIC_FIELD, 26, 21),
-      error(LanguageCode.IMPLICIT_DYNAMIC_FIELD, 55, 2),
-      error(LanguageCode.IMPLICIT_DYNAMIC_FIELD, 68, 2),
-    ]);
-  }
-
-  test_implicitDynamic_function() async {
-    _disableTestPackageImplicitDynamic();
-    await assertErrorsInCode(r'''
-T a<T>(T t) => t;
-T b<T>() => null;
-
-void main<S>() {
-  dynamic d;
-  int i;
-  a(d);
-  a(42);
-  b();
-  d = b();
-  i = b();
-
-  void f<T>(T t) {};
-  T g<T>() => null;
-
-  f(d);
-  f(42);
-  g();
-  d = g();
-  i = g();
-
-  (<T>(T t) => t)(d);
-  (<T>(T t) => t)(42);
-  (<T>() => null as T)<int>();
-}
-''', [
-      error(HintCode.UNUSED_LOCAL_VARIABLE, 73, 1),
-      error(LanguageCode.IMPLICIT_DYNAMIC_FUNCTION, 78, 1),
-      error(LanguageCode.IMPLICIT_DYNAMIC_FUNCTION, 95, 1),
-      error(LanguageCode.IMPLICIT_DYNAMIC_FUNCTION, 106, 1),
-      error(LanguageCode.IMPLICIT_DYNAMIC_FUNCTION, 167, 1),
-      error(LanguageCode.IMPLICIT_DYNAMIC_FUNCTION, 184, 1),
-      error(LanguageCode.IMPLICIT_DYNAMIC_FUNCTION, 195, 1),
-      error(LanguageCode.IMPLICIT_DYNAMIC_INVOKE, 214, 15),
-      error(HintCode.UNNECESSARY_CAST, 269, 9),
-    ]);
-  }
-
-  test_implicitDynamic_listLiteral() async {
-    _disableTestPackageImplicitDynamic();
-    await assertErrorsInCode(r'''
-var l0 = [];
-List l1 = [];
-List<dynamic> l2 = [];
-dynamic d = 42;
-var l3 = [d, d];
-
-var l4 = <dynamic>[];
-var l5 = <int>[];
-List<int> l6 = [];
-var l7 = [42];
-''', [
-      error(LanguageCode.IMPLICIT_DYNAMIC_LIST_LITERAL, 9, 2),
-      error(LanguageCode.IMPLICIT_DYNAMIC_LIST_LITERAL, 23, 2),
-      error(LanguageCode.IMPLICIT_DYNAMIC_LIST_LITERAL, 46, 2),
-      error(LanguageCode.IMPLICIT_DYNAMIC_LIST_LITERAL, 75, 6),
-    ]);
-  }
-
-  test_implicitDynamic_mapLiteral() async {
-    _disableTestPackageImplicitDynamic();
-    await assertErrorsInCode(r'''
-var m0 = {};
-Map m1 = {};
-Map<dynamic, dynamic> m2 = {};
-dynamic d = 42;
-var m3 = {d: d};
-var m4 = {'x': d, 'y': d};
-var m5 = {d: 'x'};
-
-var m6 = <dynamic, dynamic>{};
-var m7 = <String, String>{};
-Map<String, String> m8 = {};
-var m9 = {'hi': 'there'};
-''', [
-      error(LanguageCode.IMPLICIT_DYNAMIC_MAP_LITERAL, 9, 2),
-      error(LanguageCode.IMPLICIT_DYNAMIC_MAP_LITERAL, 22, 2),
-      error(LanguageCode.IMPLICIT_DYNAMIC_MAP_LITERAL, 53, 2),
-      error(LanguageCode.IMPLICIT_DYNAMIC_MAP_LITERAL, 82, 6),
-      error(LanguageCode.IMPLICIT_DYNAMIC_MAP_LITERAL, 99, 16),
-      error(LanguageCode.IMPLICIT_DYNAMIC_MAP_LITERAL, 126, 8),
-    ]);
-  }
-
   test_implicitDynamic_method() async {
     _disableTestPackageImplicitDynamic();
     await assertErrorsInCode(r'''
@@ -2170,40 +2065,21 @@ class C extends Object with M<int> {
 }
 
 abstract class D extends Object with M<num> {}
-  
+
 class E extends D with M<int> {
   int x;
 }
-  
+
 class F extends D with M<int> {
   num x;
 }
 ''', [
       error(CompileTimeErrorCode.INVALID_OVERRIDE, 124, 1),
-      error(CompileTimeErrorCode.CONFLICTING_GENERIC_INTERFACES, 186, 1),
-      error(CompileTimeErrorCode.CONFLICTING_GENERIC_INTERFACES, 186, 1),
-      error(CompileTimeErrorCode.INVALID_OVERRIDE, 218, 1),
-      error(CompileTimeErrorCode.CONFLICTING_GENERIC_INTERFACES, 232, 1),
-      error(CompileTimeErrorCode.CONFLICTING_GENERIC_INTERFACES, 232, 1),
-    ]);
-  }
-
-  test_invalidOverrides_baseClassOverrideToChildInterface() async {
-    await assertErrorsInCode('''
-class A {}
-class B {}
-
-abstract class I {
-  m(A a);
-}
-
-class Base {
-  m(B a) {}
-}
-
-class T1 extends Base implements I {}
-''', [
-      error(CompileTimeErrorCode.INCONSISTENT_INHERITANCE, 89, 2),
+      error(CompileTimeErrorCode.CONFLICTING_GENERIC_INTERFACES, 184, 1),
+      error(CompileTimeErrorCode.CONFLICTING_GENERIC_INTERFACES, 184, 1),
+      error(CompileTimeErrorCode.INVALID_OVERRIDE, 216, 1),
+      error(CompileTimeErrorCode.CONFLICTING_GENERIC_INTERFACES, 228, 1),
+      error(CompileTimeErrorCode.CONFLICTING_GENERIC_INTERFACES, 228, 1),
     ]);
   }
 
@@ -2379,28 +2255,6 @@ class Test extends Parent {
     ]);
   }
 
-  test_invalidOverrides_mixinOverrideOfInterface() async {
-    await assertErrorsInCode('''
-class A {}
-class B {}
-
-abstract class I {
-  m(A a);
-}
-
-class M {
-  m(B a) {}
-}
-
-class T1 extends Object with M implements I {}
-
-class U1 = Object with M implements I;
-''', [
-      error(CompileTimeErrorCode.INCONSISTENT_INHERITANCE, 86, 2),
-      error(CompileTimeErrorCode.INCONSISTENT_INHERITANCE, 134, 2),
-    ]);
-  }
-
   test_invalidOverrides_mixinOverrideToBase() async {
     await assertErrorsInCode('''
 class A {}
@@ -2492,41 +2346,6 @@ class T1 extends Base with M1, M2, M3 {}
 
 class U1 = Base with M1, M2, M3;
 ''');
-  }
-
-  test_invalidOverrides_noErrorsIfSubclassCorrectlyOverrideBaseAndInterface() async {
-    // This is a case were it is incorrect to say that the base class
-    // incorrectly overrides the interface.
-    await assertErrorsInCode('''
-class A {}
-class B {}
-
-class Base {
-  void m(A a) {}
-}
-
-class I1 {
-  void m(B a) {}
-}
-
-class T1 extends Base implements I1 {}
-
-class T2 extends Base implements I1 {
-  void m(dynamic a) {}
-}
-
-class T3 extends Object with Base implements I1 {}
-
-class U3 = Object with Base implements I1;
-
-class T4 extends Object with Base implements I1 {
-  void m(dynamic a) {}
-}
-''', [
-      error(CompileTimeErrorCode.INCONSISTENT_INHERITANCE, 93, 2),
-      error(CompileTimeErrorCode.INCONSISTENT_INHERITANCE, 197, 2),
-      error(CompileTimeErrorCode.INCONSISTENT_INHERITANCE, 249, 2),
-    ]);
   }
 
   test_invalidRuntimeChecks() async {
@@ -2785,209 +2604,6 @@ class U1 = Base with M;
     ]);
   }
 
-  test_mixinOverrideOfGrandInterface_interfaceOfInterfaceOfChild() async {
-    await assertErrorsInCode('''
-class A {}
-class B {}
-
-abstract class I1 {
-  m(A a);
-}
-
-abstract class I2 implements I1 {}
-
-class M {
-  m(B a) {}
-}
-
-class T1 extends Object with M implements I2 {}
-
-class U1 = Object with M implements I2;
-''', [
-      error(CompileTimeErrorCode.INCONSISTENT_INHERITANCE, 123, 2),
-      error(CompileTimeErrorCode.INCONSISTENT_INHERITANCE, 172, 2),
-    ]);
-  }
-
-  test_mixinOverrideOfGrandInterface_mixinOfInterfaceOfChild() async {
-    await assertErrorsInCode('''
-class A {}
-class B {}
-
-abstract class M1 {
-    m(A a);
-}
-
-abstract class I2 extends Object with M1 {}
-
-class M {
-  m(B a) {}
-}
-
-class T1 extends Object with M implements I2 {}
-
-class U1 = Object with M implements I2;
-''', [
-      error(CompileTimeErrorCode.INCONSISTENT_INHERITANCE, 134, 2),
-      error(CompileTimeErrorCode.INCONSISTENT_INHERITANCE, 183, 2),
-    ]);
-  }
-
-  test_mixinOverrideOfGrandInterface_superclassOfInterfaceOfChild() async {
-    await assertErrorsInCode('''
-class A {}
-class B {}
-
-abstract class I1 {
-  m(A a);
-}
-
-abstract class I2 extends I1 {}
-
-class M {
-  m(B a) {}
-}
-
-class T1 extends Object with M implements I2 {}
-
-class U1 = Object with M implements I2;
-''', [
-      error(CompileTimeErrorCode.INCONSISTENT_INHERITANCE, 120, 2),
-      error(CompileTimeErrorCode.INCONSISTENT_INHERITANCE, 169, 2),
-    ]);
-  }
-
-  test_noDuplicateReports_baseTypeAndMixinOverrideSameMethodInInterface() async {
-    await assertErrorsInCode('''
-class A {}
-class B {}
-
-abstract class I1 {
-  m(A a);
-}
-
-class Base {
-  m(B a) {}
-}
-
-class M {
-  m(B a) {}
-}
-
-// TODO(jmesserly): the `INCONSISTENT_METHOD_INHERITANCE` message is from the
-// Dart 1 checking logic (using strong mode type system), it is not produced
-// by the strong mode OverrideChecker.
-class T1 extends Base with M implements I1 {}
-
-class U1 = Base with M implements I1;
-''', [
-      error(TodoCode.TODO, 112, 74),
-      error(CompileTimeErrorCode.INCONSISTENT_INHERITANCE, 309, 2),
-      error(CompileTimeErrorCode.INCONSISTENT_INHERITANCE, 356, 2),
-    ]);
-  }
-
-  test_noDuplicateReports_twoGrandTypesOverrideSameMethodInInterface() async {
-    await assertErrorsInCode('''
-class A {}
-class B {}
-
-abstract class I1 {
-  m(A a);
-}
-
-class Grandparent {
-  m(B a) {}
-}
-
-class Parent1 extends Grandparent {
-  m(B a) {}
-}
-class Parent2 extends Grandparent {}
-
-// Note: otherwise both errors would be reported on this line
-class T1 extends Parent1 implements I1 {}
-class T2 extends Parent2 implements I1 {}
-''', [
-      error(CompileTimeErrorCode.INCONSISTENT_INHERITANCE, 247, 2),
-      error(CompileTimeErrorCode.INCONSISTENT_INHERITANCE, 289, 2),
-    ]);
-  }
-
-  test_noDuplicateReports_twoMixinsOverrideSameMethodInInterface() async {
-    await assertErrorsInCode('''
-class A {}
-class B {}
-
-abstract class I1 {
-  m(A a);
-}
-
-class M1 {
-  m(B a) {}
-}
-
-class M2 {
-  m(B a) {}
-}
-
-class T1 extends Object with M1, M2 implements I1 {}
-''', [
-      error(CompileTimeErrorCode.INCONSISTENT_INHERITANCE, 114, 2),
-    ]);
-  }
-
-  test_noDuplicateReports_typeAndBaseTypeOverrideSameMethodInInterface() async {
-    await assertErrorsInCode('''
-class A {}
-class B {}
-
-abstract class I1 {
-  void m(A a);
-}
-
-class Base {
-  void m(B a) {}
-}
-
-class T1 extends Base implements I1 {
-  void m(B a) {}
-}
-
-class T2 extends Base implements I1 {}
-''', [
-      error(CompileTimeErrorCode.INVALID_OVERRIDE, 139, 1),
-      error(CompileTimeErrorCode.INCONSISTENT_INHERITANCE, 158, 2),
-    ]);
-  }
-
-  test_noDuplicateReports_typeAndMixinOverrideSameMethodInInterface() async {
-    await assertErrorsInCode('''
-class A {}
-class B {}
-
-abstract class I1 {
-  void m(A a);
-}
-
-class M {
-  void m(B a) {}
-}
-
-class T1 extends Object with M implements I1 {
-  void m(B a) {}
-}
-
-class T2 extends Object with M implements I1 {}
-
-class U2 = Object with M implements I1;
-''', [
-      error(CompileTimeErrorCode.INVALID_OVERRIDE, 145, 1),
-      error(CompileTimeErrorCode.INCONSISTENT_INHERITANCE, 164, 2),
-      error(CompileTimeErrorCode.INCONSISTENT_INHERITANCE, 213, 2),
-    ]);
-  }
-
   test_noDuplicateReports_typeOverridesSomeMethodInMultipleInterfaces() async {
     await assertErrorsInCode('''
 class A {}
@@ -3180,6 +2796,7 @@ m() {
   f();
 }
 ''', [
+      error(HintCode.DEPRECATED_IMPLEMENTS_FUNCTION, 197, 8),
       error(CompileTimeErrorCode.UNDEFINED_METHOD, 332, 1),
       error(CompileTimeErrorCode.UNDEFINED_GETTER, 341, 1),
       error(CompileTimeErrorCode.UNDEFINED_OPERATOR, 346, 1),
@@ -3478,69 +3095,6 @@ class T1 extends Base {
     ]);
   }
 
-  test_superclassOverrideOfGrandInterface_interfaceOfInterfaceOfChild() async {
-    await assertErrorsInCode('''
-class A {}
-class B {}
-
-abstract class I1 {
-  m(A a);
-}
-
-abstract class I2 implements I1 {}
-
-class Base {
-  m(B a) {}
-}
-
-class T1 extends Base implements I2 {}
-''', [
-      error(CompileTimeErrorCode.INCONSISTENT_INHERITANCE, 126, 2),
-    ]);
-  }
-
-  test_superclassOverrideOfGrandInterface_mixinOfInterfaceOfChild() async {
-    await assertErrorsInCode('''
-class A {}
-class B {}
-
-abstract class M1 {
-  m(A a);
-}
-
-abstract class I2 extends Object with M1 {}
-
-class Base {
-  m(B a) {}
-}
-
-class T1 extends Base implements I2 {}
-''', [
-      error(CompileTimeErrorCode.INCONSISTENT_INHERITANCE, 135, 2),
-    ]);
-  }
-
-  test_superclassOverrideOfGrandInterface_superclassOfInterfaceOfChild() async {
-    await assertErrorsInCode('''
-class A {}
-class B {}
-
-abstract class I1 {
-  m(A a);
-}
-
-abstract class I2 extends I1 {}
-
-class Base {
-  m(B a) {}
-}
-
-class T1 extends Base implements I2 {}
-''', [
-      error(CompileTimeErrorCode.INCONSISTENT_INHERITANCE, 123, 2),
-    ]);
-  }
-
   test_superConstructor() async {
     await assertErrorsInCode('''
 class A { A(A x) {} }
@@ -3802,79 +3356,6 @@ void f<T extends num>(T x, T y) {
     ]);
   }
 
-  test_typeSubtyping_assigningClass() async {
-    await assertErrorsInCode('''
-class A {}
-class B extends A {}
-
-void main() {
-   dynamic y;
-   Object o;
-   int i = 0;
-   double d = 0.0;
-   num n;
-   A a;
-   B b;
-   y = a;
-   o = a;
-   i = a;
-   d = a;
-   n = a;
-   a = a;
-   b = a;
-}
-''', [
-      error(HintCode.UNUSED_LOCAL_VARIABLE, 58, 1),
-      error(HintCode.UNUSED_LOCAL_VARIABLE, 71, 1),
-      error(HintCode.UNUSED_LOCAL_VARIABLE, 81, 1),
-      error(HintCode.UNUSED_LOCAL_VARIABLE, 98, 1),
-      error(HintCode.UNUSED_LOCAL_VARIABLE, 114, 1),
-      error(HintCode.UNUSED_LOCAL_VARIABLE, 130, 1),
-      error(CompileTimeErrorCode.INVALID_ASSIGNMENT, 160, 1),
-      error(CompileTimeErrorCode.INVALID_ASSIGNMENT, 170, 1),
-      error(CompileTimeErrorCode.INVALID_ASSIGNMENT, 180, 1),
-    ]);
-  }
-
-  test_typeSubtyping_assigningSubclass() async {
-    await assertErrorsInCode('''
-class A {}
-class B extends A {}
-class C extends A {}
-
-void main() {
-   dynamic y;
-   Object o;
-   int i = 0;
-   double d = 0.0;
-   num n;
-   A a;
-   B b;
-   C c;
-   y = b;
-   o = b;
-   i = b;
-   d = b;
-   n = b;
-   a = b;
-   b = b;
-   c = b;
-}
-''', [
-      error(HintCode.UNUSED_LOCAL_VARIABLE, 79, 1),
-      error(HintCode.UNUSED_LOCAL_VARIABLE, 92, 1),
-      error(HintCode.UNUSED_LOCAL_VARIABLE, 102, 1),
-      error(HintCode.UNUSED_LOCAL_VARIABLE, 119, 1),
-      error(HintCode.UNUSED_LOCAL_VARIABLE, 135, 1),
-      error(HintCode.UNUSED_LOCAL_VARIABLE, 143, 1),
-      error(HintCode.UNUSED_LOCAL_VARIABLE, 159, 1),
-      error(CompileTimeErrorCode.INVALID_ASSIGNMENT, 189, 1),
-      error(CompileTimeErrorCode.INVALID_ASSIGNMENT, 199, 1),
-      error(CompileTimeErrorCode.INVALID_ASSIGNMENT, 209, 1),
-      error(CompileTimeErrorCode.INVALID_ASSIGNMENT, 239, 1),
-    ]);
-  }
-
   test_typeSubtyping_dynamicDowncasts() async {
     await assertErrorsInCode('''
 class A {}
@@ -3927,49 +3408,6 @@ void main() {
 }
 ''', [
       error(HintCode.UNUSED_LOCAL_VARIABLE, 58, 1),
-    ]);
-  }
-
-  test_typeSubtyping_interfaces() async {
-    await assertErrorsInCode('''
-class A {}
-class B extends A {}
-class C extends A {}
-class D extends B implements C {}
-
-void main() {
-   A top;
-   B left;
-   C right;
-   D bot;
-   {
-     top = top;
-     top = left;
-     top = right;
-     top = bot;
-   }
-   {
-     left = top;
-     left = left;
-     left = right;
-     left = bot;
-   }
-   {
-     right = top;
-     right = left;
-     right = right;
-     right = bot;
-   }
-   {
-     bot = top;
-     bot = left;
-     bot = right;
-     bot = bot;
-   }
-}
-''', [
-      error(CompileTimeErrorCode.INVALID_ASSIGNMENT, 274, 5),
-      error(CompileTimeErrorCode.INVALID_ASSIGNMENT, 339, 4),
     ]);
   }
 
@@ -4026,18 +3464,6 @@ test() {
       error(HintCode.UNUSED_LOCAL_VARIABLE, 201, 1),
       error(HintCode.UNUSED_LOCAL_VARIABLE, 237, 1),
       error(CompileTimeErrorCode.NON_BOOL_NEGATION_EXPRESSION, 280, 1),
-    ]);
-  }
-
-  test_unboundRedirectingConstructor() async {
-    // This is a regression test for https://github.com/dart-lang/sdk/issues/25071
-    await assertErrorsInCode('''
-class Foo {
-  Foo() : this.init();
-}
- ''', [
-      error(CompileTimeErrorCode.REDIRECT_GENERATIVE_TO_MISSING_CONSTRUCTOR, 22,
-          11),
     ]);
   }
 

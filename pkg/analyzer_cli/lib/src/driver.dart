@@ -13,6 +13,7 @@ import 'package:analyzer/src/dart/analysis/analysis_context_collection.dart';
 import 'package:analyzer/src/dart/analysis/byte_store.dart';
 import 'package:analyzer/src/dart/analysis/driver.dart';
 import 'package:analyzer/src/dart/analysis/driver_based_analysis_context.dart';
+import 'package:analyzer/src/dart/analysis/file_content_cache.dart';
 import 'package:analyzer/src/dart/analysis/file_state.dart';
 import 'package:analyzer/src/dart/analysis/results.dart';
 import 'package:analyzer/src/generated/engine.dart';
@@ -86,7 +87,7 @@ class Driver implements CommandLineStarter {
   }
 
   @override
-  Future<void> start(List<String> args) async {
+  Future<void> start(List<String> arguments) async {
     if (analysisDriver != null) {
       throw StateError('start() can only be called once');
     }
@@ -97,14 +98,14 @@ class Driver implements CommandLineStarter {
     linter.registerLintRules();
 
     // Parse commandline options.
-    var options = CommandLineOptions.parse(resourceProvider, args);
+    var options = CommandLineOptions.parse(resourceProvider, arguments);
 
     _analysisContextProvider = _AnalysisContextProvider(resourceProvider);
 
     // Do analysis.
     if (options.batchMode) {
       var batchRunner = BatchRunner(outSink, errorSink);
-      batchRunner.runAsBatch(args, (List<String> args) async {
+      batchRunner.runAsBatch(arguments, (List<String> args) async {
         var options = CommandLineOptions.parse(resourceProvider, args);
         return await _analyzeAll(options);
       });
@@ -185,9 +186,11 @@ class Driver implements CommandLineStarter {
     // batch flag and source file" error message.
     ErrorFormatter formatter;
     if (options.jsonFormat) {
-      formatter = JsonErrorFormatter(errorSink, options, stats,
+      formatter = JsonErrorFormatter(outSink, options, stats,
           severityProcessor: defaultSeverityProcessor);
     } else if (options.machineFormat) {
+      // The older machine format emits to stderr (instead of stdout) for legacy
+      // reasons.
       formatter = MachineErrorFormatter(errorSink, options, stats,
           severityProcessor: defaultSeverityProcessor);
     } else {
@@ -241,7 +244,11 @@ class Driver implements CommandLineStarter {
           var content = file.readAsStringSync();
           var lineInfo = LineInfo.fromContent(content);
           var errors = analyzeAnalysisOptions(
-              file.createSource(), content, analysisDriver.sourceFactory);
+            file.createSource(),
+            content,
+            analysisDriver.sourceFactory,
+            analysisDriver.currentSession.analysisContext.contextRoot.root.path,
+          );
           formatter.formatErrors([
             ErrorsResultImpl(analysisDriver.currentSession, path, null,
                 lineInfo, false, errors)
@@ -363,7 +370,7 @@ class Driver implements CommandLineStarter {
 
     formatter.flush();
 
-    if (!options.machineFormat) {
+    if (!options.machineFormat && !options.jsonFormat) {
       stats.print(outSink);
     }
 
@@ -485,6 +492,7 @@ class Driver implements CommandLineStarter {
 
 class _AnalysisContextProvider {
   final ResourceProvider _resourceProvider;
+  final FileContentCache _fileContentCache;
 
   CommandLineOptions _commandLineOptions;
   List<String> _pathList;
@@ -493,7 +501,8 @@ class _AnalysisContextProvider {
   AnalysisContextCollectionImpl _collection;
   DriverBasedAnalysisContext _analysisContext;
 
-  _AnalysisContextProvider(this._resourceProvider);
+  _AnalysisContextProvider(this._resourceProvider)
+      : _fileContentCache = FileContentCache(_resourceProvider);
 
   DriverBasedAnalysisContext get analysisContext {
     return _analysisContext;
@@ -550,6 +559,7 @@ class _AnalysisContextProvider {
       resourceProvider: _resourceProvider,
       sdkPath: _commandLineOptions.dartSdkPath,
       updateAnalysisOptions: _updateAnalysisOptions,
+      fileContentCache: _fileContentCache,
     );
 
     _setContextForPath(path);

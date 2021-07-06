@@ -126,8 +126,8 @@ const FpuRegister FpuTMP = VTMP;
 const int kNumberOfFpuRegisters = kNumberOfVRegisters;
 const FpuRegister kNoFpuRegister = kNoVRegister;
 
-extern const char* cpu_reg_names[kNumberOfCpuRegisters];
-extern const char* fpu_reg_names[kNumberOfFpuRegisters];
+extern const char* const cpu_reg_names[kNumberOfCpuRegisters];
+extern const char* const fpu_reg_names[kNumberOfFpuRegisters];
 
 // Register aliases.
 const Register TMP = R16;  // Used as scratch register by assembler.
@@ -142,7 +142,7 @@ const Register THR = R26;           // Caches current thread in generated code.
 const Register CALLEE_SAVED_TEMP = R19;
 const Register CALLEE_SAVED_TEMP2 = R20;
 const Register HEAP_BITS = R28;  // write_barrier_mask << 32 | heap_base >> 32
-const Register NULL_REG = R22;  // Caches NullObject() value.
+const Register NULL_REG = R22;   // Caches NullObject() value.
 
 // ABI for catch-clause entry point.
 const Register kExceptionObjectReg = R0;
@@ -152,9 +152,6 @@ const Register kStackTraceObjectReg = R1;
 const Register kWriteBarrierObjectReg = R1;
 const Register kWriteBarrierValueReg = R0;
 const Register kWriteBarrierSlotReg = R25;
-
-// ABI for allocation stubs.
-const Register kAllocationStubTypeArgumentsReg = R1;
 
 // Common ABI for shared slow path stubs.
 struct SharedSlowPathStubABI {
@@ -183,13 +180,13 @@ struct TTSInternalRegs {
 // Registers in addition to those listed in TypeTestABI used inside the
 // implementation of subtype test cache stubs that are _not_ preserved.
 struct STCInternalRegs {
-  static const Register kInstanceCidOrFunctionReg = R6;
+  static const Register kInstanceCidOrSignatureReg = R6;
   static const Register kInstanceInstantiatorTypeArgumentsReg = R5;
   static const Register kInstanceParentFunctionTypeArgumentsReg = R9;
   static const Register kInstanceDelayedFunctionTypeArgumentsReg = R10;
 
   static const intptr_t kInternalRegisters =
-      (1 << kInstanceCidOrFunctionReg) |
+      (1 << kInstanceCidOrSignatureReg) |
       (1 << kInstanceInstantiatorTypeArgumentsReg) |
       (1 << kInstanceParentFunctionTypeArgumentsReg) |
       (1 << kInstanceDelayedFunctionTypeArgumentsReg);
@@ -291,29 +288,43 @@ struct RangeErrorABI {
   static const Register kIndexReg = R1;
 };
 
+// ABI for AllocateObjectStub.
+struct AllocateObjectABI {
+  static const Register kResultReg = R0;
+  static const Register kTypeArgumentsReg = R1;
+};
+
 // ABI for AllocateClosureStub.
 struct AllocateClosureABI {
-  static const Register kResultReg = R0;
+  static const Register kResultReg = AllocateObjectABI::kResultReg;
   static const Register kFunctionReg = R1;
+  static const Register kContextReg = R2;
   static const Register kScratchReg = R4;
 };
 
 // ABI for AllocateMintShared*Stub.
 struct AllocateMintABI {
-  static const Register kResultReg = R0;
+  static const Register kResultReg = AllocateObjectABI::kResultReg;
   static const Register kTempReg = R1;
 };
 
 // ABI for Allocate{Mint,Double,Float32x4,Float64x2}Stub.
 struct AllocateBoxABI {
-  static const Register kResultReg = R0;
+  static const Register kResultReg = AllocateObjectABI::kResultReg;
   static const Register kTempReg = R1;
 };
 
-// ABI for Allocate<TypedData>ArrayStub.
+// ABI for AllocateArrayStub.
+struct AllocateArrayABI {
+  static const Register kResultReg = AllocateObjectABI::kResultReg;
+  static const Register kLengthReg = R2;
+  static const Register kTypeArgumentsReg = R1;
+};
+
+// ABI for AllocateTypedDataArrayStub.
 struct AllocateTypedDataArrayABI {
+  static const Register kResultReg = AllocateObjectABI::kResultReg;
   static const Register kLengthReg = R4;
-  static const Register kResultReg = R0;
 };
 
 // ABI for DispatchTableNullErrorStub and consequently for all dispatch
@@ -345,7 +356,7 @@ const RegList kAllCpuRegistersList = 0xFFFFFFFF;
 // C++ ABI call registers.
 const RegList kAbiArgumentCpuRegs =
     R(R0) | R(R1) | R(R2) | R(R3) | R(R4) | R(R5) | R(R6) | R(R7);
-#if defined(TARGET_OS_FUCHSIA)
+#if defined(DART_TARGET_OS_FUCHSIA)
 // We rely on R18 not being touched by Dart generated assembly or stubs at all.
 // We rely on that any calls into C++ also preserve R18.
 const RegList kAbiPreservedCpuRegs = R(R18) | R(R19) | R(R20) | R(R21) |
@@ -422,7 +433,7 @@ class CallingConventions {
       kAlignedToWordSize;
 
   // How stack arguments are aligned.
-#if defined(TARGET_OS_MACOS_IOS)
+#if defined(DART_TARGET_OS_MACOS_IOS) || defined(DART_TARGET_OS_MACOS)
   // > Function arguments may consume slots on the stack that are not multiples
   // > of 8 bytes.
   // https://developer.apple.com/documentation/xcode/writing_arm64_code_for_apple_platforms
@@ -438,7 +449,7 @@ class CallingConventions {
 
   // Whether 1 or 2 byte-sized arguments or return values are passed extended
   // to 4 bytes.
-#if defined(TARGET_OS_MACOS_IOS)
+#if defined(DART_TARGET_OS_MACOS_IOS) || defined(DART_TARGET_OS_MACOS)
   static constexpr ExtensionStrategy kReturnRegisterExtension = kExtendedTo4;
   static constexpr ExtensionStrategy kArgumentRegisterExtension = kExtendedTo4;
 #else

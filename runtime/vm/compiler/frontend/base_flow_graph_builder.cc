@@ -576,7 +576,8 @@ Fragment BaseFlowGraphBuilder::LoadStaticField(const Field& field,
 Fragment BaseFlowGraphBuilder::RedefinitionWithType(const AbstractType& type) {
   auto redefinition = new (Z) RedefinitionInstr(Pop());
   redefinition->set_constrained_type(
-      new (Z) CompileType(CompileType::FromAbstractType(type)));
+      new (Z) CompileType(CompileType::FromAbstractType(
+          type, CompileType::kCanBeNull, CompileType::kCannotBeSentinel)));
   Push(redefinition);
   return Fragment(redefinition);
 }
@@ -616,7 +617,6 @@ Fragment BaseFlowGraphBuilder::StoreIndexed(classid_t class_id) {
   StoreIndexedInstr* store = new (Z) StoreIndexedInstr(
       Pop(),  // Array.
       index, value, emit_store_barrier, /*index_unboxed=*/false,
-
       compiler::target::Instance::ElementSizeFor(class_id), class_id,
       kAlignedAccess, DeoptId::kNone, InstructionSource());
   return Fragment(store);
@@ -890,9 +890,10 @@ Fragment BaseFlowGraphBuilder::AllocateContext(
 }
 
 Fragment BaseFlowGraphBuilder::AllocateClosure(TokenPosition position) {
+  auto const context = Pop();
   auto const function = Pop();
-  auto* allocate = new (Z) AllocateClosureInstr(InstructionSource(position),
-                                                function, GetNextDeoptId());
+  auto* allocate = new (Z) AllocateClosureInstr(
+      InstructionSource(position), function, context, GetNextDeoptId());
   Push(allocate);
   return Fragment(allocate);
 }
@@ -980,7 +981,8 @@ Fragment BaseFlowGraphBuilder::Box(Representation from) {
 }
 
 Fragment BaseFlowGraphBuilder::BuildFfiAsFunctionInternalCall(
-    const TypeArguments& signatures) {
+    const TypeArguments& signatures,
+    bool is_leaf) {
   ASSERT(signatures.IsInstantiated());
   ASSERT(signatures.Length() == 2);
 
@@ -990,12 +992,15 @@ Fragment BaseFlowGraphBuilder::BuildFfiAsFunctionInternalCall(
   ASSERT(dart_type.IsFunctionType() && native_type.IsFunctionType());
   const Function& target =
       Function::ZoneHandle(compiler::ffi::TrampolineFunction(
-          FunctionType::Cast(dart_type), FunctionType::Cast(native_type)));
+          FunctionType::Cast(dart_type), FunctionType::Cast(native_type),
+          is_leaf));
 
   Fragment code;
   // Store the pointer in the context, we cannot load the untagged address
   // here as these can be unoptimized call sites.
   LocalVariable* pointer = MakeTemporary();
+
+  code += Constant(target);
 
   auto& context_slots = CompilerState::Current().GetDummyContextSlots(
       /*context_id=*/0, /*num_variables=*/1);
@@ -1006,17 +1011,10 @@ Fragment BaseFlowGraphBuilder::BuildFfiAsFunctionInternalCall(
   code += LoadLocal(pointer);
   code += StoreNativeField(*context_slots[0]);
 
-  code += Constant(target);
   code += AllocateClosure();
-  LocalVariable* closure = MakeTemporary();
 
-  code += LoadLocal(closure);
-  code += LoadLocal(context);
-  code += StoreNativeField(Slot::Closure_context(),
-                           StoreInstanceFieldInstr::Kind::kInitializing);
-
-  // Drop address and context.
-  code += DropTempsPreserveTop(2);
+  // Drop address.
+  code += DropTempsPreserveTop(1);
 
   return code;
 }
@@ -1106,7 +1104,7 @@ Fragment BaseFlowGraphBuilder::BuildEntryPointsIntrospection() {
     return Drop();
   }
   auto& closure = Closure::ZoneHandle(Z, Closure::Cast(options).ptr());
-  LocalVariable* entry_point_num = MakeTemporary();
+  LocalVariable* entry_point_num = MakeTemporary("entry_point_num");
 
   auto& function_name = String::ZoneHandle(
       Z, String::New(function.ToLibNamePrefixedQualifiedCString(), Heap::kOld));
@@ -1123,37 +1121,32 @@ Fragment BaseFlowGraphBuilder::BuildEntryPointsIntrospection() {
   call_hook += Constant(closure);
   call_hook += Constant(function_name);
   call_hook += LoadLocal(entry_point_num);
-  call_hook += Constant(Function::ZoneHandle(Z, closure.function()));
+  if (FLAG_precompiled_mode && FLAG_use_bare_instructions) {
+    call_hook += Constant(closure);
+  } else {
+    call_hook += Constant(Function::ZoneHandle(Z, closure.function()));
+  }
   call_hook += ClosureCall(TokenPosition::kNoSource,
                            /*type_args_len=*/0, /*argument_count=*/3,
                            /*argument_names=*/Array::ZoneHandle(Z));
-  call_hook += Drop();  // result of closure call
-  call_hook += Drop();  // entrypoint number
+  call_hook += Drop();                           // result of closure call
+  call_hook += DropTemporary(&entry_point_num);  // entrypoint number
   return call_hook;
 }
 
 Fragment BaseFlowGraphBuilder::ClosureCall(TokenPosition position,
                                            intptr_t type_args_len,
                                            intptr_t argument_count,
-                                           const Array& argument_names,
-                                           bool is_statically_checked) {
-  const intptr_t total_count = argument_count + (type_args_len > 0 ? 1 : 0) + 1;
+                                           const Array& argument_names) {
+  const intptr_t total_count =
+      (type_args_len > 0 ? 1 : 0) + argument_count +
+      /*closure (bare instructions) or function (otherwise)*/ 1;
   InputsArray* arguments = GetArguments(total_count);
-  ClosureCallInstr* call = new (Z)
-      ClosureCallInstr(arguments, type_args_len, argument_names,
-                       InstructionSource(position), GetNextDeoptId(),
-                       is_statically_checked ? Code::EntryKind::kUnchecked
-                                             : Code::EntryKind::kNormal);
+  ClosureCallInstr* call =
+      new (Z) ClosureCallInstr(arguments, type_args_len, argument_names,
+                               InstructionSource(position), GetNextDeoptId());
   Push(call);
   return Fragment(call);
-}
-
-Fragment BaseFlowGraphBuilder::StringInterpolate(TokenPosition position) {
-  Value* array = Pop();
-  StringInterpolateInstr* interpolate = new (Z) StringInterpolateInstr(
-      array, InstructionSource(position), GetNextDeoptId());
-  Push(interpolate);
-  return Fragment(interpolate);
 }
 
 void BaseFlowGraphBuilder::reset_context_depth_for_deopt_id(intptr_t deopt_id) {

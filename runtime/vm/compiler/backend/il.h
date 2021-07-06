@@ -478,7 +478,6 @@ struct InstrAttrs {
   M(Constraint, kNoGC)                                                         \
   M(StringToCharCode, kNoGC)                                                   \
   M(OneByteStringFromCharCode, kNoGC)                                          \
-  M(StringInterpolate, _)                                                      \
   M(Utf8Scan, kNoGC)                                                           \
   M(InvokeMathCFunction, kNoGC)                                                \
   M(TruncDivMod, kNoGC)                                                        \
@@ -499,7 +498,7 @@ struct InstrAttrs {
   M(UnboxUint32, kNoGC)                                                        \
   M(BoxInt32, _)                                                               \
   M(UnboxInt32, kNoGC)                                                         \
-  M(BoxUint8, kNoGC)                                                           \
+  M(BoxSmallInt, kNoGC)                                                        \
   M(IntConverter, kNoGC)                                                       \
   M(BitCast, kNoGC)                                                            \
   M(Deoptimize, kNoGC)                                                         \
@@ -1264,9 +1263,6 @@ class TemplateInstruction
 class MoveOperands : public ZoneAllocated {
  public:
   MoveOperands(Location dest, Location src) : dest_(dest), src_(src) {}
-
-  MoveOperands(const MoveOperands& other)
-      : dest_(other.dest_), src_(other.src_) {}
 
   MoveOperands& operator=(const MoveOperands& other) {
     dest_ = other.dest_;
@@ -2481,9 +2477,12 @@ class PhiInstr : public Definition {
 
   virtual void set_representation(Representation r) { representation_ = r; }
 
-  // In AOT mode Phi instructions do not check types of inputs when unboxing.
+  // Only Int32 phis in JIT mode are unboxed optimistically.
   virtual SpeculativeMode SpeculativeModeOfInput(intptr_t index) const {
-    return CompilerState::Current().is_aot() ? kNotSpeculative : kGuardInputs;
+    return (CompilerState::Current().is_aot() ||
+            (representation_ != kUnboxedInt32))
+               ? kNotSpeculative
+               : kGuardInputs;
   }
 
   virtual uword Hash() const {
@@ -3140,6 +3139,9 @@ class GotoInstr : public TemplateInstruction<0, NoThrow> {
     return true;
   }
 
+  // May require a deoptimization target for int32 Phi input conversions.
+  virtual intptr_t DeoptimizationTarget() const { return GetDeoptId(); }
+
   virtual bool ComputeCanDeoptimize() const { return false; }
 
   virtual bool HasUnknownSideEffects() const { return false; }
@@ -3177,28 +3179,39 @@ class GotoInstr : public TemplateInstruction<0, NoThrow> {
 
 // IndirectGotoInstr represents a dynamically computed jump. Only
 // IndirectEntryInstr targets are valid targets of an indirect goto. The
-// concrete target to jump to is given as a parameter to the indirect goto.
+// concrete target index to jump to is given as a parameter to the indirect
+// goto.
 //
 // In order to preserve split-edge form, an indirect goto does not itself point
 // to its targets. Instead, for each possible target, the successors_ field
 // will contain an ordinary goto instruction that jumps to the target.
 // TODO(zerny): Implement direct support instead of embedding gotos.
 //
-// Byte offsets of all possible targets are stored in the offsets_ array. The
-// desired offset is looked up while the generated code is executing, and passed
-// to IndirectGoto as an input.
+// The input to the [IndirectGotoInstr] is the target index to jump to.
+// All targets of the [IndirectGotoInstr] are added via [AddSuccessor] and get
+// increasing indices.
+//
+// The FlowGraphCompiler will - as a post-processing step - invoke
+// [ComputeOffsetTable] of all [IndirectGotoInstr]s. In there we initialize a
+// TypedDataInt32Array containing offsets of all [IndirectEntryInstr]s (the
+// offests are relative to start of the instruction payload).
+//
+//  => See `FlowGraphCompiler::CompileGraph()`
+//  => See `IndirectGotoInstr::ComputeOffsetTable`
 class IndirectGotoInstr : public TemplateInstruction<1, NoThrow> {
  public:
-  IndirectGotoInstr(const TypedData* offsets, Value* offset_from_start)
-      : offsets_(*offsets) {
-    SetInputAt(0, offset_from_start);
+  IndirectGotoInstr(intptr_t target_count, Value* target_index)
+      : offsets_(TypedData::ZoneHandle(TypedData::New(kTypedDataInt32ArrayCid,
+                                                      target_count,
+                                                      Heap::kOld))) {
+    SetInputAt(0, target_index);
   }
 
   DECLARE_INSTRUCTION(IndirectGoto)
 
   virtual Representation RequiredInputRepresentation(intptr_t idx) const {
     ASSERT(idx == 0);
-    return kNoRepresentation;
+    return kTagged;
   }
 
   void AddSuccessor(TargetEntryInstr* successor) {
@@ -3973,14 +3986,12 @@ class ClosureCallInstr : public TemplateDartCall<1> {
                    intptr_t type_args_len,
                    const Array& argument_names,
                    const InstructionSource& source,
-                   intptr_t deopt_id,
-                   Code::EntryKind entry_kind = Code::EntryKind::kNormal)
+                   intptr_t deopt_id)
       : TemplateDartCall(deopt_id,
                          type_args_len,
                          argument_names,
                          inputs,
-                         source),
-        entry_kind_(entry_kind) {}
+                         source) {}
 
   DECLARE_INSTRUCTION(ClosureCall)
 
@@ -3989,13 +4000,9 @@ class ClosureCallInstr : public TemplateDartCall<1> {
 
   virtual bool HasUnknownSideEffects() const { return true; }
 
-  Code::EntryKind entry_kind() const { return entry_kind_; }
-
   PRINT_OPERANDS_TO_SUPPORT
 
  private:
-  const Code::EntryKind entry_kind_;
-
   DISALLOW_COPY_AND_ASSIGN(ClosureCallInstr);
 };
 
@@ -4103,6 +4110,7 @@ class InstanceCallBaseInstr : public TemplateDartCall<0> {
       }
       idx--;
     }
+    if (interface_target_.IsNull()) return kGuardInputs;
     return interface_target_.is_unboxed_parameter_at(idx) ? kNotSpeculative
                                                           : kGuardInputs;
   }
@@ -5112,12 +5120,14 @@ class FfiCallInstr : public Definition {
  public:
   FfiCallInstr(Zone* zone,
                intptr_t deopt_id,
-               const compiler::ffi::CallMarshaller& marshaller)
+               const compiler::ffi::CallMarshaller& marshaller,
+               bool is_leaf)
       : Definition(deopt_id),
         zone_(zone),
         marshaller_(marshaller),
         inputs_(marshaller.NumDefinitions() + 1 +
-                (marshaller.PassTypedData() ? 1 : 0)) {
+                (marshaller.PassTypedData() ? 1 : 0)),
+        is_leaf_(is_leaf) {
     inputs_.FillWith(
         nullptr, 0,
         marshaller.NumDefinitions() + 1 + (marshaller.PassTypedData() ? 1 : 0));
@@ -5168,13 +5178,26 @@ class FfiCallInstr : public Definition {
  private:
   virtual void RawSetInputAt(intptr_t i, Value* value) { inputs_[i] = value; }
 
-  void EmitParamMoves(FlowGraphCompiler* compiler);
-  void EmitReturnMoves(FlowGraphCompiler* compiler);
+  LocationSummary* MakeLocationSummaryInternal(Zone* zone,
+                                               bool is_optimizing,
+                                               const Register temp) const;
+
+  // Clobbers both given registers.
+  // `saved_fp` is used as the frame base to rebase off of.
+  void EmitParamMoves(FlowGraphCompiler* compiler,
+                      const Register saved_fp,
+                      const Register temp);
+  // Clobbers both given temp registers.
+  void EmitReturnMoves(FlowGraphCompiler* compiler,
+                       const Register temp0,
+                       const Register temp1);
 
   Zone* const zone_;
   const compiler::ffi::CallMarshaller& marshaller_;
 
   GrowableArray<Value*> inputs_;
+
+  bool is_leaf_;
 
   DISALLOW_COPY_AND_ASSIGN(FfiCallInstr);
 };
@@ -5545,7 +5568,7 @@ class LoadStaticFieldInstr : public TemplateDefinition<0, Throws> {
   virtual CompileType ComputeType() const;
 
   const Field& field() const { return field_; }
-  bool IsFieldInitialized(Instance* field_value = nullptr) const;
+  bool IsFieldInitialized(Object* field_value = nullptr) const;
 
   bool calls_initializer() const { return calls_initializer_; }
   void set_calls_initializer(bool value) { calls_initializer_ = value; }
@@ -5696,7 +5719,6 @@ class LoadIndexedInstr : public TemplateDefinition<2, NoThrow> {
 
   virtual Definition* Canonicalize(FlowGraph* flow_graph);
 
-
  private:
   const bool index_unboxed_;
   const intptr_t index_scale_;
@@ -5825,41 +5847,6 @@ class StringToCharCodeInstr : public TemplateDefinition<1, NoThrow, Pure> {
   const intptr_t cid_;
 
   DISALLOW_COPY_AND_ASSIGN(StringToCharCodeInstr);
-};
-
-class StringInterpolateInstr : public TemplateDefinition<1, Throws> {
- public:
-  StringInterpolateInstr(Value* value,
-                         const InstructionSource& source,
-                         intptr_t deopt_id)
-      : TemplateDefinition(source, deopt_id),
-        token_pos_(source.token_pos),
-        function_(Function::ZoneHandle()) {
-    SetInputAt(0, value);
-  }
-
-  Value* value() const { return inputs_[0]; }
-  virtual TokenPosition token_pos() const { return token_pos_; }
-
-  virtual CompileType ComputeType() const;
-  // Issues a static call to Dart code which calls toString on objects.
-  virtual bool HasUnknownSideEffects() const { return true; }
-  virtual bool CanCallDart() const { return true; }
-  virtual bool ComputeCanDeoptimize() const {
-    return !CompilerState::Current().is_aot();
-  }
-
-  const Function& CallFunction() const;
-
-  virtual Definition* Canonicalize(FlowGraph* flow_graph);
-
-  DECLARE_INSTRUCTION(StringInterpolate)
-
- private:
-  const TokenPosition token_pos_;
-  Function& function_;
-
-  DISALLOW_COPY_AND_ASSIGN(StringInterpolateInstr);
 };
 
 // Scanning instruction to compute the result size and decoding parameters
@@ -6006,7 +5993,6 @@ class StoreIndexedInstr : public TemplateInstruction<3, NoThrow> {
 
   virtual Instruction* Canonicalize(FlowGraph* flow_graph);
 
-
  private:
   compiler::Assembler::CanBeSmi CanValueBeSmi() const {
     return compiler::Assembler::kValueCanBeSmi;
@@ -6122,6 +6108,27 @@ class AllocationInstr : public Definition {
     return InputCount();
   }
 
+  // Returns the slot in the allocated object that contains the value at the
+  // given input position. Returns nullptr if the input position is invalid
+  // or if the input is not stored in the object.
+  virtual const Slot* SlotForInput(intptr_t pos) { return nullptr; }
+
+  // Returns the input index that has a corresponding slot which is identical to
+  // the given slot. Returns a negative index if no such input found.
+  intptr_t InputForSlot(const Slot& slot) {
+    for (intptr_t i = 0; i < InputCount(); i++) {
+      auto* const input_slot = SlotForInput(i);
+      if (input_slot != nullptr && input_slot->IsIdentical(slot)) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  // Returns whether the allocated object has initialized fields and/or payload
+  // elements. Override for any subclass that returns an uninitialized object.
+  virtual bool ObjectIsInitialized() { return true; }
+
   PRINT_OPERANDS_TO_SUPPORT
 
   DEFINE_INSTRUCTION_TYPE_CHECK(Allocation);
@@ -6155,6 +6162,7 @@ class TemplateAllocation : public AllocationInstr {
 
 class AllocateObjectInstr : public AllocationInstr {
  public:
+  enum { kTypeArgumentsPos = 0 };
   AllocateObjectInstr(const InstructionSource& source,
                       const Class& cls,
                       intptr_t deopt_id,
@@ -6164,7 +6172,9 @@ class AllocateObjectInstr : public AllocationInstr {
         type_arguments_(type_arguments) {
     ASSERT((cls.NumTypeArguments() > 0) == (type_arguments != nullptr));
     if (type_arguments != nullptr) {
-      SetInputAt(0, type_arguments);
+      SetInputAt(kTypeArgumentsPos, type_arguments);
+      type_arguments_slot_ =
+          &Slot::GetTypeArgumentsSlotFor(Thread::Current(), cls);
     }
   }
 
@@ -6178,7 +6188,7 @@ class AllocateObjectInstr : public AllocationInstr {
     return (type_arguments_ != nullptr) ? 1 : 0;
   }
   virtual Value* InputAt(intptr_t i) const {
-    ASSERT(type_arguments_ != nullptr && i == 0);
+    ASSERT(type_arguments_ != nullptr && i == kTypeArgumentsPos);
     return type_arguments_;
   }
 
@@ -6192,37 +6202,45 @@ class AllocateObjectInstr : public AllocationInstr {
     return Heap::IsAllocatableInNewSpace(cls.target_instance_size());
   }
 
+  virtual const Slot* SlotForInput(intptr_t pos) {
+    return pos == kTypeArgumentsPos ? type_arguments_slot_ : nullptr;
+  }
+
   PRINT_OPERANDS_TO_SUPPORT
 
  private:
   virtual void RawSetInputAt(intptr_t i, Value* value) {
-    ASSERT((type_arguments_ != nullptr) && (i == 0));
+    ASSERT((type_arguments_ != nullptr) && (i == kTypeArgumentsPos));
     ASSERT(value != nullptr);
     type_arguments_ = value;
   }
 
   const Class& cls_;
   Value* type_arguments_;
+  const Slot* type_arguments_slot_ = nullptr;
 
   DISALLOW_COPY_AND_ASSIGN(AllocateObjectInstr);
 };
 
 // Allocates and null initializes a closure object, given the closure function
-// as a value.
-class AllocateClosureInstr : public TemplateAllocation<1> {
+// and the context as values.
+class AllocateClosureInstr : public TemplateAllocation<2> {
  public:
-  enum Inputs { kFunctionPos = 0 };
+  enum Inputs { kFunctionPos = 0, kContextPos = 1 };
   AllocateClosureInstr(const InstructionSource& source,
                        Value* closure_function,
+                       Value* context,
                        intptr_t deopt_id)
       : TemplateAllocation(source, deopt_id) {
     SetInputAt(kFunctionPos, closure_function);
+    SetInputAt(kContextPos, context);
   }
 
   DECLARE_INSTRUCTION(AllocateClosure)
   virtual CompileType ComputeType() const;
 
   Value* closure_function() const { return inputs_[kFunctionPos]; }
+  Value* context() const { return inputs_[kContextPos]; }
 
   const Function& known_function() const {
     Value* const value = closure_function();
@@ -6231,6 +6249,17 @@ class AllocateClosureInstr : public TemplateAllocation<1> {
       return Function::Cast(value->BoundConstant());
     }
     return Object::null_function();
+  }
+
+  virtual const Slot* SlotForInput(intptr_t pos) {
+    switch (pos) {
+      case kFunctionPos:
+        return &Slot::Closure_function();
+      case kContextPos:
+        return &Slot::Closure_context();
+      default:
+        return TemplateAllocation::SlotForInput(pos);
+    }
   }
 
   virtual bool HasUnknownSideEffects() const { return false; }
@@ -6261,6 +6290,8 @@ class AllocateUninitializedContextInstr : public TemplateAllocation<0> {
     return compiler::target::WillAllocateNewOrRememberedContext(
         num_context_variables_);
   }
+
+  virtual bool ObjectIsInitialized() { return false; }
 
   PRINT_OPERANDS_TO_SUPPORT
 
@@ -6396,20 +6427,20 @@ class TemplateArrayAllocation : public ArrayAllocationInstr {
 class CreateArrayInstr : public TemplateArrayAllocation<2> {
  public:
   CreateArrayInstr(const InstructionSource& source,
-                   Value* element_type,
+                   Value* type_arguments,
                    Value* num_elements,
                    intptr_t deopt_id)
       : TemplateArrayAllocation(source, deopt_id) {
-    SetInputAt(kElementTypePos, element_type);
+    SetInputAt(kTypeArgumentsPos, type_arguments);
     SetInputAt(kLengthPos, num_elements);
   }
 
-  enum { kElementTypePos = 0, kLengthPos = 1 };
+  enum { kTypeArgumentsPos = 0, kLengthPos = 1 };
 
   DECLARE_INSTRUCTION(CreateArray)
   virtual CompileType ComputeType() const;
 
-  Value* element_type() const { return inputs_[kElementTypePos]; }
+  Value* type_arguments() const { return inputs_[kTypeArgumentsPos]; }
   virtual Value* num_elements() const { return inputs_[kLengthPos]; }
 
   virtual bool HasUnknownSideEffects() const { return false; }
@@ -6419,6 +6450,17 @@ class CreateArrayInstr : public TemplateArrayAllocation<2> {
     if (!HasConstantNumElements()) return false;
     return compiler::target::WillAllocateNewOrRememberedArray(
         GetConstantNumElements());
+  }
+
+  virtual const Slot* SlotForInput(intptr_t pos) {
+    switch (pos) {
+      case kTypeArgumentsPos:
+        return &Slot::Array_type_arguments();
+      case kLengthPos:
+        return &Slot::Array_length();
+      default:
+        return TemplateArrayAllocation::SlotForInput(pos);
+    }
   }
 
  private:
@@ -6448,6 +6490,15 @@ class AllocateTypedDataInstr : public TemplateArrayAllocation<1> {
   virtual bool WillAllocateNewOrRemembered() const {
     // No write barriers are generated for typed data accesses.
     return false;
+  }
+
+  virtual const Slot* SlotForInput(intptr_t pos) {
+    switch (pos) {
+      case kLengthPos:
+        return &Slot::TypedDataBase_length();
+      default:
+        return TemplateArrayAllocation::SlotForInput(pos);
+    }
   }
 
  private:
@@ -6609,7 +6660,7 @@ class LoadFieldInstr : public TemplateDefinition<1, Throws> {
 
   virtual void InferRange(RangeAnalysis* analysis, Range* range);
 
-  bool IsImmutableLengthLoad() const;
+  bool IsImmutableLengthLoad() const { return slot().IsImmutableLengthSlot(); }
 
   // Try evaluating this load against the given constant value of
   // the instance. Returns true if evaluation succeeded and
@@ -6971,18 +7022,22 @@ class BoxIntegerInstr : public BoxInstr {
   DISALLOW_COPY_AND_ASSIGN(BoxIntegerInstr);
 };
 
-class BoxUint8Instr : public BoxIntegerInstr {
+class BoxSmallIntInstr : public BoxIntegerInstr {
  public:
-  explicit BoxUint8Instr(Value* value)
-      : BoxIntegerInstr(kUnboxedUint8, value) {}
+  explicit BoxSmallIntInstr(Representation rep, Value* value)
+      : BoxIntegerInstr(rep, value) {
+    ASSERT(RepresentationUtils::ValueSize(rep) * kBitsPerByte <=
+           compiler::target::kSmiBits);
+  }
 
   virtual bool ValueFitsSmi() const { return true; }
 
-  DECLARE_INSTRUCTION(BoxUint8)
+  DECLARE_INSTRUCTION(BoxSmallInt)
 
  private:
-  DISALLOW_COPY_AND_ASSIGN(BoxUint8Instr);
+  DISALLOW_COPY_AND_ASSIGN(BoxSmallIntInstr);
 };
+
 class BoxInteger32Instr : public BoxIntegerInstr {
  public:
   BoxInteger32Instr(Representation representation, Value* value)
@@ -7101,8 +7156,9 @@ class UnboxInstr : public TemplateDefinition<1, NoThrow, Pure> {
 
   intptr_t ValueOffset() const { return Boxing::ValueOffset(representation_); }
 
+ protected:
   const Representation representation_;
-  const SpeculativeMode speculative_mode_;
+  SpeculativeMode speculative_mode_;
 
   DISALLOW_COPY_AND_ASSIGN(UnboxInstr);
 };
@@ -9405,6 +9461,14 @@ class Environment : public ZoneAllocated {
     return LazyDeoptPruningBits::decode(bitfield_);
   }
 
+  bool LazyDeoptToBeforeDeoptId() const {
+    return LazyDeoptToBeforeDeoptId::decode(bitfield_);
+  }
+
+  void MarkAsLazyDeoptToBeforeDeoptId() {
+    bitfield_ = LazyDeoptToBeforeDeoptId::update(true, bitfield_);
+  }
+
   Environment* GetLazyDeoptEnv(Zone* zone) {
     const intptr_t num_args_to_prune = LazyDeoptPruneCount();
     if (num_args_to_prune == 0) return this;
@@ -9483,11 +9547,13 @@ class Environment : public ZoneAllocated {
   friend class FlowGraphDeserializer;   // For constructor and deopt_id_.
 
   class LazyDeoptPruningBits : public BitField<uintptr_t, uintptr_t, 0, 8> {};
+  class LazyDeoptToBeforeDeoptId
+      : public BitField<uintptr_t, bool, LazyDeoptPruningBits::kNextBit, 1> {};
   class DeoptIdBits
       : public BitField<uintptr_t,
                         intptr_t,
-                        LazyDeoptPruningBits::kNextBit,
-                        kBitsPerWord - LazyDeoptPruningBits::kNextBit,
+                        LazyDeoptToBeforeDeoptId::kNextBit,
+                        kBitsPerWord - LazyDeoptToBeforeDeoptId::kNextBit,
                         /*sign_extend=*/true> {};
 
   Environment(intptr_t length,
@@ -9498,6 +9564,7 @@ class Environment : public ZoneAllocated {
       : values_(length),
         fixed_parameter_count_(fixed_parameter_count),
         bitfield_(DeoptIdBits::encode(DeoptId::kNone) |
+                  LazyDeoptToBeforeDeoptId::encode(false) |
                   LazyDeoptPruningBits::encode(lazy_deopt_pruning_count)),
         parsed_function_(parsed_function),
         outer_(outer) {}
@@ -9507,6 +9574,9 @@ class Environment : public ZoneAllocated {
   }
   void SetLazyDeoptPruneCount(intptr_t value) {
     bitfield_ = LazyDeoptPruningBits::update(value, bitfield_);
+  }
+  void SetLazyDeoptToBeforeDeoptId(bool value) {
+    bitfield_ = LazyDeoptToBeforeDeoptId::update(value, bitfield_);
   }
 
   GrowableArray<Value*> values_;

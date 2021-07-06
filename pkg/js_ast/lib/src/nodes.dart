@@ -48,6 +48,7 @@ abstract class NodeVisitor<T> {
 
   T visitNamedFunction(NamedFunction node);
   T visitFun(Fun node);
+  T visitArrowFunction(ArrowFunction node);
 
   T visitDeferredStatement(DeferredStatement node);
   T visitDeferredExpression(DeferredExpression node);
@@ -69,6 +70,7 @@ abstract class NodeVisitor<T> {
   T visitArrayHole(ArrayHole node);
   T visitObjectInitializer(ObjectInitializer node);
   T visitProperty(Property node);
+  T visitMethodDefinition(MethodDefinition node);
   T visitRegExpLiteral(RegExpLiteral node);
 
   T visitAwait(Await node);
@@ -149,7 +151,9 @@ class BaseVisitor<T> implements NodeVisitor<T> {
   T visitThis(This node) => visitParameter(node);
 
   T visitNamedFunction(NamedFunction node) => visitExpression(node);
-  T visitFun(Fun node) => visitExpression(node);
+  T visitFunctionExpression(FunctionExpression node) => visitExpression(node);
+  T visitFun(Fun node) => visitFunctionExpression(node);
+  T visitArrowFunction(ArrowFunction node) => visitFunctionExpression(node);
 
   T visitToken(DeferredToken node) => visitExpression(node);
 
@@ -175,6 +179,7 @@ class BaseVisitor<T> implements NodeVisitor<T> {
   T visitArrayHole(ArrayHole node) => visitExpression(node);
   T visitObjectInitializer(ObjectInitializer node) => visitExpression(node);
   T visitProperty(Property node) => visitNode(node);
+  T visitMethodDefinition(MethodDefinition node) => visitNode(node);
   T visitRegExpLiteral(RegExpLiteral node) => visitExpression(node);
 
   T visitInterpolatedNode(InterpolatedNode node) => visitNode(node);
@@ -244,6 +249,7 @@ abstract class NodeVisitor1<R, A> {
 
   R visitNamedFunction(NamedFunction node, A arg);
   R visitFun(Fun node, A arg);
+  R visitArrowFunction(ArrowFunction node, A arg);
 
   R visitDeferredStatement(DeferredStatement node, A arg);
   R visitDeferredExpression(DeferredExpression node, A arg);
@@ -265,6 +271,7 @@ abstract class NodeVisitor1<R, A> {
   R visitArrayHole(ArrayHole node, A arg);
   R visitObjectInitializer(ObjectInitializer node, A arg);
   R visitProperty(Property node, A arg);
+  R visitMethodDefinition(MethodDefinition node, A arg);
   R visitRegExpLiteral(RegExpLiteral node, A arg);
 
   R visitAwait(Await node, A arg);
@@ -355,6 +362,7 @@ class BaseVisitor1<R, A> implements NodeVisitor1<R, A> {
 
   R visitNamedFunction(NamedFunction node, A arg) => visitExpression(node, arg);
   R visitFun(Fun node, A arg) => visitExpression(node, arg);
+  R visitArrowFunction(ArrowFunction node, A arg) => visitExpression(node, arg);
 
   R visitToken(DeferredToken node, A arg) => visitExpression(node, arg);
 
@@ -385,6 +393,7 @@ class BaseVisitor1<R, A> implements NodeVisitor1<R, A> {
   R visitObjectInitializer(ObjectInitializer node, A arg) =>
       visitExpression(node, arg);
   R visitProperty(Property node, A arg) => visitNode(node, arg);
+  R visitMethodDefinition(MethodDefinition node, A arg) => visitNode(node, arg);
   R visitRegExpLiteral(RegExpLiteral node, A arg) => visitExpression(node, arg);
 
   R visitInterpolatedNode(InterpolatedNode node, A arg) => visitNode(node, arg);
@@ -1031,14 +1040,17 @@ abstract class Name extends Literal implements Declaration, Parameter {
 }
 
 class LiteralStringFromName extends LiteralString {
-  Name name;
+  final Name name;
 
-  LiteralStringFromName(this.name) : super(null);
+  LiteralStringFromName(this.name) : super(null) {
+    ArgumentError.checkNotNull(name, 'name');
+  }
 
   @override
   bool get isFinalized => name.isFinalized;
 
-  String get value => '"${name.name}"';
+  @override
+  String get value => name.name;
 
   void visitChildren<T>(NodeVisitor<T> visitor) {
     name.accept(visitor);
@@ -1371,14 +1383,14 @@ class Postfix extends Expression {
   int get precedenceLevel => UNARY;
 }
 
+RegExp _identifierRE = new RegExp(r'^[A-Za-z_$][A-Za-z_$0-9]*$');
+
 abstract class VariableReference extends Expression {
   final String name;
 
   VariableReference(this.name) {
     assert(_identifierRE.hasMatch(name), "Non-identifier name '$name'");
   }
-
-  static RegExp _identifierRE = new RegExp(r'^[A-Za-z_$][A-Za-z_$0-9]*$');
 
   T accept<T>(NodeVisitor<T> visitor);
 
@@ -1463,9 +1475,18 @@ class NamedFunction extends Expression {
   int get precedenceLevel => LEFT_HAND_SIDE;
 }
 
-class Fun extends Expression {
-  final List<Parameter> params;
+abstract class FunctionExpression extends Expression {
+  Node body;
+  List<Parameter> params;
+  AsyncModifier asyncModifier;
+}
+
+class Fun extends FunctionExpression {
+  @override
   final Block body;
+  @override
+  final List<Parameter> params;
+  @override
   final AsyncModifier asyncModifier;
 
   Fun(this.params, this.body, {this.asyncModifier: AsyncModifier.sync});
@@ -1488,6 +1509,38 @@ class Fun extends Expression {
   Fun _clone() => new Fun(params, body, asyncModifier: asyncModifier);
 
   int get precedenceLevel => LEFT_HAND_SIDE;
+}
+
+class ArrowFunction extends FunctionExpression {
+  @override
+  final Node body;
+  @override
+  final List<Parameter> params;
+  @override
+  final AsyncModifier asyncModifier;
+
+  ArrowFunction(this.params, this.body,
+      {this.asyncModifier: AsyncModifier.sync});
+
+  T accept<T>(NodeVisitor<T> visitor) => visitor.visitArrowFunction(this);
+
+  R accept1<R, A>(NodeVisitor1<R, A> visitor, A arg) =>
+      visitor.visitArrowFunction(this, arg);
+
+  void visitChildren<T>(NodeVisitor<T> visitor) {
+    for (Parameter param in params) param.accept(visitor);
+    body.accept(visitor);
+  }
+
+  void visitChildren1<R, A>(NodeVisitor1<R, A> visitor, A arg) {
+    for (Parameter param in params) param.accept1(visitor, arg);
+    body.accept1(visitor, arg);
+  }
+
+  ArrowFunction _clone() =>
+      new ArrowFunction(params, body, asyncModifier: asyncModifier);
+
+  int get precedenceLevel => ASSIGNMENT;
 }
 
 class AsyncModifier {
@@ -1520,10 +1573,10 @@ class PropertyAccess extends Expression {
   PropertyAccess(this.receiver, this.selector);
 
   PropertyAccess.field(this.receiver, String fieldName)
-      : selector = new LiteralString('"$fieldName"');
+      : selector = LiteralString(fieldName);
 
   PropertyAccess.indexed(this.receiver, int index)
-      : selector = new LiteralNumber('$index');
+      : selector = LiteralNumber('$index');
 
   T accept<T>(NodeVisitor<T> visitor) => visitor.visitAccess(this);
 
@@ -1633,16 +1686,11 @@ class LiteralNull extends Literal {
 class LiteralString extends Literal {
   final String value;
 
-  /**
-   * Constructs a LiteralString from a string value.
-   *
-   * The constructor does not add the required quotes.  If [value] is not
-   * surrounded by quotes and properly escaped, the resulting object is invalid
-   * as a JS value.
-   *
-   * TODO(sra): Introduce variants for known valid strings that don't allocate a
-   * new string just to add quotes.
-   */
+  /// Constructs a LiteralString for a string containing the characters of
+  /// `value`.
+  ///
+  /// When printed, the string will be escaped and quoted according to the
+  /// printer's settings.
   LiteralString(this.value);
 
   T accept<T>(NodeVisitor<T> visitor) => visitor.visitLiteralString(this);
@@ -1650,17 +1698,39 @@ class LiteralString extends Literal {
   R accept1<R, A>(NodeVisitor1<R, A> visitor, A arg) =>
       visitor.visitLiteralString(this, arg);
 
-  LiteralString _clone() => new LiteralString(value);
+  LiteralString _clone() => LiteralString(value);
+
+  @override
+  String toString() {
+    final sb = StringBuffer('$runtimeType("');
+    String end = '"';
+    int count = 0;
+    for (int rune in value.runes) {
+      if (++count > 20) {
+        end = '"...';
+        break;
+      }
+      if (32 <= rune && rune < 127) {
+        sb.writeCharCode(rune);
+      } else {
+        sb.write(r'\u{');
+        sb.write(rune.toRadixString(16));
+        sb.write(r'}');
+      }
+    }
+    sb.write(end);
+    sb.write(')');
+    return sb.toString();
+  }
 }
 
 class StringConcatenation extends Literal {
   final List<Literal> parts;
 
-  /**
-   * Constructs a StringConcatenation from a list of Literal elements.
-   * The constructor does not add surrounding quotes to the resulting
-   * concatenated string.
-   */
+  /// Constructs a StringConcatenation from a list of Literal elements.
+  ///
+  /// The constructor does not add surrounding quotes to the resulting
+  /// concatenated string.
   StringConcatenation(this.parts);
 
   T accept<T>(NodeVisitor<T> visitor) => visitor.visitStringConcatenation(this);
@@ -1791,6 +1861,38 @@ class Property extends Node {
   }
 
   Property _clone() => new Property(name, value);
+}
+
+class MethodDefinition extends Node implements Property {
+  @override
+  final Expression name;
+  final Fun function;
+
+  MethodDefinition(this.name, this.function);
+
+  @override
+  Fun get value => function;
+
+  @override
+  T accept<T>(NodeVisitor<T> visitor) => visitor.visitMethodDefinition(this);
+
+  R accept1<R, A>(NodeVisitor1<R, A> visitor, A arg) =>
+      visitor.visitMethodDefinition(this, arg);
+
+  @override
+  void visitChildren<T>(NodeVisitor<T> visitor) {
+    name.accept(visitor);
+    function.accept(visitor);
+  }
+
+  @override
+  void visitChildren1<R, A>(NodeVisitor1<R, A> visitor, A arg) {
+    name.accept1(visitor, arg);
+    function.accept1(visitor, arg);
+  }
+
+  @override
+  MethodDefinition _clone() => MethodDefinition(name, function);
 }
 
 /// Tag class for all interpolated positions.

@@ -151,6 +151,22 @@ struct RetainReasons : public AllStatic {
   static constexpr const char* kEntryPointPragma = "entry point pragma";
   // The function is a target of FFI callback.
   static constexpr const char* kFfiCallbackTarget = "ffi callback target";
+  // The signature is used in a closure function.
+  static constexpr const char* kClosureSignature = "closure signature";
+  // The signature is used in an FFI trampoline.
+  static constexpr const char* kFfiTrampolineSignature =
+      "FFI trampoline signature";
+  // The signature is used in a native function.
+  static constexpr const char* kNativeSignature = "native function signature";
+  // The signature has required named parameters.
+  static constexpr const char* kRequiredNamedParameters =
+      "signature has required named parameters";
+  // The signature is used in a function that has dynamic calls.
+  static constexpr const char* kDynamicallyCalledSignature =
+      "signature of dynamically called function";
+  // The signature is used in a function with an entry point pragma.
+  static constexpr const char* kEntryPointPragmaSignature =
+      "signature of entry point function";
 };
 
 class RetainedReasonsWriter : public ValueObject {
@@ -267,6 +283,9 @@ class RetainedReasonsWriter : public ValueObject {
       if (key->IsClass()) {
         return Utils::WordHash(Class::Cast(*key).id());
       }
+      if (key->IsAbstractType()) {
+        return AbstractType::Cast(*key).Hash();
+      }
       return Utils::WordHash(key->GetClassId());
     }
 
@@ -285,6 +304,11 @@ class RetainedReasonsWriter : public ValueObject {
                             function.ToLibNamePrefixedQualifiedCString());
       writer_.PrintProperty("kind",
                             UntaggedFunction::KindToCString(function.kind()));
+      return;
+    } else if (obj.IsFunctionType()) {
+      writer_.PrintProperty("type", "FunctionType");
+      const auto& sig = FunctionType::Cast(obj);
+      writer_.PrintProperty("name", sig.ToCString());
       return;
     }
     FATAL("Unexpected object %s", obj.ToCString());
@@ -375,6 +399,8 @@ Precompiler::Precompiler(Thread* thread)
       sent_selectors_(),
       functions_called_dynamically_(
           HashTables::New<FunctionSet>(/*initial_capacity=*/1024)),
+      functions_with_entry_point_pragmas_(
+          HashTables::New<FunctionSet>(/*initial_capacity=*/1024)),
       seen_functions_(HashTables::New<FunctionSet>(/*initial_capacity=*/1024)),
       possibly_retained_functions_(
           HashTables::New<FunctionSet>(/*initial_capacity=*/1024)),
@@ -401,6 +427,7 @@ Precompiler::Precompiler(Thread* thread)
 Precompiler::~Precompiler() {
   // We have to call Release() in DEBUG mode.
   functions_called_dynamically_.Release();
+  functions_with_entry_point_pragmas_.Release();
   seen_functions_.Release();
   possibly_retained_functions_.Release();
   functions_to_retain_.Release();
@@ -566,10 +593,6 @@ void Precompiler::DoCompileAll() {
         DropFunctions();
         DropFields();
         TraceTypesFromRetainedClasses();
-        DropTypes();
-        DropFunctionTypes();
-        DropTypeParameters();
-        DropTypeArguments();
 
         // Clear these before dropping classes as they may hold onto otherwise
         // dead instances of classes we will remove or otherwise unused symbols.
@@ -1077,9 +1100,9 @@ void Precompiler::AddTypesOf(const Function& function) {
   // We're not retaining the parent due to this function, so wrap it with
   // a weak serialization reference.
   const auto& data = ClosureData::CheckedHandle(Z, function.data());
-  const auto& wsr = WeakSerializationReference::Handle(
-      Z, WeakSerializationReference::New(parent_function,
-                                         Object::null_function()));
+  const auto& wsr =
+      Object::Handle(Z, WeakSerializationReference::New(
+                            parent_function, Object::null_function()));
   data.set_parent_function(wsr);
 }
 
@@ -1505,6 +1528,7 @@ void Precompiler::AddAnnotatedRoots() {
 
           if (type == EntryPointPragma::kAlways ||
               type == EntryPointPragma::kCallOnly) {
+            functions_with_entry_point_pragmas_.Insert(function);
             AddFunction(function, RetainReasons::kEntryPointPragma);
           }
 
@@ -1513,6 +1537,7 @@ void Precompiler::AddAnnotatedRoots() {
               function.kind() != UntaggedFunction::kConstructor &&
               !function.IsSetterFunction()) {
             function2 = function.ImplicitClosureFunction();
+            functions_with_entry_point_pragmas_.Insert(function2);
             AddFunction(function2, RetainReasons::kEntryPointPragma);
           }
 
@@ -1525,6 +1550,7 @@ void Precompiler::AddAnnotatedRoots() {
           for (intptr_t i = 0; i < implicit_getters.Length(); ++i) {
             field ^= implicit_getters.At(i);
             if (function.accessor_field() == field.ptr()) {
+              functions_with_entry_point_pragmas_.Insert(function);
               AddFunction(function, RetainReasons::kImplicitGetter);
             }
           }
@@ -1534,6 +1560,7 @@ void Precompiler::AddAnnotatedRoots() {
           for (intptr_t i = 0; i < implicit_setters.Length(); ++i) {
             field ^= implicit_setters.At(i);
             if (function.accessor_field() == field.ptr()) {
+              functions_with_entry_point_pragmas_.Insert(function);
               AddFunction(function, RetainReasons::kImplicitSetter);
             }
           }
@@ -1543,6 +1570,7 @@ void Precompiler::AddAnnotatedRoots() {
           for (intptr_t i = 0; i < implicit_static_getters.Length(); ++i) {
             field ^= implicit_static_getters.At(i);
             if (function.accessor_field() == field.ptr()) {
+              functions_with_entry_point_pragmas_.Insert(function);
               AddFunction(function, RetainReasons::kImplicitStaticGetter);
             }
           }
@@ -2055,6 +2083,51 @@ void Precompiler::DropFunctions() {
   Code& code = Code::Handle(Z);
   Object& owner = Object::Handle(Z);
   GrowableObjectArray& retained_functions = GrowableObjectArray::Handle(Z);
+  auto& sig = FunctionType::Handle(Z);
+  auto& ref = Object::Handle(Z);
+
+  auto trim_function = [&](const Function& function) {
+    sig = function.signature();
+    // In the AOT runtime, most calls are direct or through the dispatch table,
+    // not resolved via dynamic lookup. Thus, we only need to retain the
+    // function signature in the following cases:
+    if (function.IsClosureFunction()) {
+      // Dynamic calls to closures go through dynamic closure call dispatchers,
+      // which need the signature.
+      return AddRetainReason(sig, RetainReasons::kClosureSignature);
+    }
+    if (function.IsFfiTrampoline()) {
+      // FFI trampolines may be dynamically called.
+      return AddRetainReason(sig, RetainReasons::kFfiTrampolineSignature);
+    }
+    if (function.is_native()) {
+      return AddRetainReason(sig, RetainReasons::kNativeSignature);
+    }
+    if (function.HasRequiredNamedParameters()) {
+      // Required named parameters must be checked, so a NoSuchMethod exception
+      // can be thrown if they are not provided.
+      return AddRetainReason(sig, RetainReasons::kRequiredNamedParameters);
+    }
+    if (functions_called_dynamically_.ContainsKey(function)) {
+      // Dynamic resolution of these functions checks for valid arguments.
+      return AddRetainReason(sig, RetainReasons::kDynamicallyCalledSignature);
+    }
+    if (functions_with_entry_point_pragmas_.ContainsKey(function)) {
+      // Dynamic resolution of entry points also checks for valid arguments.
+      return AddRetainReason(sig, RetainReasons::kEntryPointPragmaSignature);
+    }
+    if (FLAG_trace_precompiler) {
+      THR_Print("Clearing signature for function %s\n",
+                function.ToLibNamePrefixedQualifiedCString());
+    }
+    // Other functions not listed here may end up in dynamic resolution via
+    // UnlinkedCalls. However, since it is not a dynamic invocation and has
+    // been type checked at compile time, we already know the arguments are
+    // valid. Thus, we can skip checking arguments for functions with dropped
+    // signatures in ResolveDynamicForReceiverClassWithCustomLookup.
+    ref = WeakSerializationReference::New(sig, Object::null_function_type());
+    function.set_signature(ref);
+  };
 
   auto drop_function = [&](const Function& function) {
     if (function.HasCode()) {
@@ -2092,6 +2165,7 @@ void Precompiler::DropFunctions() {
         function ^= functions.At(j);
         function.DropUncompiledImplicitClosureFunction();
         if (functions_to_retain_.ContainsKey(function)) {
+          trim_function(function);
           retained_functions.Add(function);
         } else {
           drop_function(function);
@@ -2117,6 +2191,7 @@ void Precompiler::DropFunctions() {
           if (functions_to_retain_.ContainsKey(function)) {
             retained_functions.Add(name);
             retained_functions.Add(desc);
+            trim_function(function);
             retained_functions.Add(function);
           } else {
             drop_function(function);
@@ -2139,6 +2214,7 @@ void Precompiler::DropFunctions() {
   retained_functions = GrowableObjectArray::New();
   ClosureFunctionsCache::ForAllClosureFunctions([&](const Function& function) {
     if (functions_to_retain_.ContainsKey(function)) {
+      trim_function(function);
       retained_functions.Add(function);
     } else {
       drop_function(function);
@@ -2275,169 +2351,13 @@ void Precompiler::AttachOptimizedTypeTestingStub() {
          StubCode::TopTypeTypeTest().EntryPoint());
 }
 
-void Precompiler::DropTypes() {
-  ObjectStore* object_store = IG->object_store();
-  GrowableObjectArray& retained_types =
-      GrowableObjectArray::Handle(Z, GrowableObjectArray::New());
-  Array& types_array = Array::Handle(Z);
-  Type& type = Type::Handle(Z);
-  // First drop all the types that are not referenced.
-  {
-    CanonicalTypeSet types_table(Z, object_store->canonical_types());
-    types_array = HashTables::ToArray(types_table, false);
-    for (intptr_t i = 0; i < types_array.Length(); i++) {
-      type ^= types_array.At(i);
-      bool retain = types_to_retain_.HasKey(&type);
-      if (retain) {
-        retained_types.Add(type);
-      } else {
-        type.ClearCanonical();
-        dropped_type_count_++;
-      }
-    }
-    types_table.Release();
-  }
-
-  // Now construct a new type table and save in the object store.
-  const intptr_t dict_size =
-      Utils::RoundUpToPowerOfTwo(retained_types.Length() * 4 / 3);
-  types_array = HashTables::New<CanonicalTypeSet>(dict_size, Heap::kOld);
-  CanonicalTypeSet types_table(Z, types_array.ptr());
-  bool present;
-  for (intptr_t i = 0; i < retained_types.Length(); i++) {
-    type ^= retained_types.At(i);
-    present = types_table.Insert(type);
-    ASSERT(!present);
-  }
-  object_store->set_canonical_types(types_table.Release());
-}
-
-void Precompiler::DropFunctionTypes() {
-  ObjectStore* object_store = IG->object_store();
-  GrowableObjectArray& retained_types =
-      GrowableObjectArray::Handle(Z, GrowableObjectArray::New());
-  Array& types_array = Array::Handle(Z);
-  FunctionType& type = FunctionType::Handle(Z);
-  // First drop all the function types that are not referenced.
-  {
-    CanonicalFunctionTypeSet types_table(
-        Z, object_store->canonical_function_types());
-    types_array = HashTables::ToArray(types_table, false);
-    for (intptr_t i = 0; i < types_array.Length(); i++) {
-      type ^= types_array.At(i);
-      bool retain = functiontypes_to_retain_.HasKey(&type);
-      if (retain) {
-        retained_types.Add(type);
-      } else {
-        type.ClearCanonical();
-        dropped_functiontype_count_++;
-      }
-    }
-    types_table.Release();
-  }
-
-  // Now construct a new function type table and save in the object store.
-  const intptr_t dict_size =
-      Utils::RoundUpToPowerOfTwo(retained_types.Length() * 4 / 3);
-  types_array =
-      HashTables::New<CanonicalFunctionTypeSet>(dict_size, Heap::kOld);
-  CanonicalFunctionTypeSet types_table(Z, types_array.ptr());
-  bool present;
-  for (intptr_t i = 0; i < retained_types.Length(); i++) {
-    type ^= retained_types.At(i);
-    present = types_table.Insert(type);
-    ASSERT(!present);
-  }
-  object_store->set_canonical_function_types(types_table.Release());
-}
-
-void Precompiler::DropTypeParameters() {
-  ObjectStore* object_store = IG->object_store();
-  GrowableObjectArray& retained_typeparams =
-      GrowableObjectArray::Handle(Z, GrowableObjectArray::New());
-  Array& typeparams_array = Array::Handle(Z);
-  TypeParameter& typeparam = TypeParameter::Handle(Z);
-  // First drop all the type parameters that are not referenced.
-  // Note that we only visit 'free-floating' type parameters and not
-  // declarations of type parameters contained in the 'type_parameters'
-  // array in generic classes and functions.
-  {
-    CanonicalTypeParameterSet typeparams_table(
-        Z, object_store->canonical_type_parameters());
-    typeparams_array = HashTables::ToArray(typeparams_table, false);
-    for (intptr_t i = 0; i < typeparams_array.Length(); i++) {
-      typeparam ^= typeparams_array.At(i);
-      bool retain = typeparams_to_retain_.HasKey(&typeparam);
-      if (retain) {
-        retained_typeparams.Add(typeparam);
-      } else {
-        typeparam.ClearCanonical();
-        dropped_typeparam_count_++;
-      }
-    }
-    typeparams_table.Release();
-  }
-
-  // Now construct a new type parameter table and save in the object store.
-  const intptr_t dict_size =
-      Utils::RoundUpToPowerOfTwo(retained_typeparams.Length() * 4 / 3);
-  typeparams_array =
-      HashTables::New<CanonicalTypeParameterSet>(dict_size, Heap::kOld);
-  CanonicalTypeParameterSet typeparams_table(Z, typeparams_array.ptr());
-  bool present;
-  for (intptr_t i = 0; i < retained_typeparams.Length(); i++) {
-    typeparam ^= retained_typeparams.At(i);
-    present = typeparams_table.Insert(typeparam);
-    ASSERT(!present);
-  }
-  object_store->set_canonical_type_parameters(typeparams_table.Release());
-}
-
-void Precompiler::DropTypeArguments() {
-  ObjectStore* object_store = IG->object_store();
-  Array& typeargs_array = Array::Handle(Z);
-  GrowableObjectArray& retained_typeargs =
-      GrowableObjectArray::Handle(Z, GrowableObjectArray::New());
-  TypeArguments& typeargs = TypeArguments::Handle(Z);
-  // First drop all the type arguments that are not referenced.
-  {
-    CanonicalTypeArgumentsSet typeargs_table(
-        Z, object_store->canonical_type_arguments());
-    typeargs_array = HashTables::ToArray(typeargs_table, false);
-    for (intptr_t i = 0; i < typeargs_array.Length(); i++) {
-      typeargs ^= typeargs_array.At(i);
-      bool retain = typeargs_to_retain_.HasKey(&typeargs);
-      if (retain) {
-        retained_typeargs.Add(typeargs);
-      } else {
-        typeargs.ClearCanonical();
-        dropped_typearg_count_++;
-      }
-    }
-    typeargs_table.Release();
-  }
-
-  // Now construct a new type arguments table and save in the object store.
-  const intptr_t dict_size =
-      Utils::RoundUpToPowerOfTwo(retained_typeargs.Length() * 4 / 3);
-  typeargs_array =
-      HashTables::New<CanonicalTypeArgumentsSet>(dict_size, Heap::kOld);
-  CanonicalTypeArgumentsSet typeargs_table(Z, typeargs_array.ptr());
-  bool present;
-  for (intptr_t i = 0; i < retained_typeargs.Length(); i++) {
-    typeargs ^= retained_typeargs.At(i);
-    present = typeargs_table.Insert(typeargs);
-    ASSERT(!present);
-  }
-  object_store->set_canonical_type_arguments(typeargs_table.Release());
-}
-
 void Precompiler::TraceTypesFromRetainedClasses() {
   auto& lib = Library::Handle(Z);
   auto& cls = Class::Handle(Z);
   auto& members = Array::Handle(Z);
   auto& constants = Array::Handle(Z);
   auto& retained_constants = GrowableObjectArray::Handle(Z);
+  auto& obj = Object::Handle(Z);
   auto& constant = Instance::Handle(Z);
 
   SafepointWriteRwLocker ml(T, T->isolate_group()->program_lock());
@@ -2469,7 +2389,12 @@ void Precompiler::TraceTypesFromRetainedClasses() {
       retained_constants = GrowableObjectArray::New();
       if (!constants.IsNull()) {
         for (intptr_t j = 0; j < constants.Length(); j++) {
-          constant ^= constants.At(j);
+          obj = constants.At(j);
+          if ((obj.ptr() == HashTableBase::UnusedMarker().ptr()) ||
+              (obj.ptr() == HashTableBase::DeletedMarker().ptr())) {
+            continue;
+          }
+          constant ^= obj.ptr();
           bool retain = consts_to_retain_.HasKey(&constant);
           if (retain) {
             retained_constants.Add(constant);

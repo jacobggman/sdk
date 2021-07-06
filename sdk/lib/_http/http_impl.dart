@@ -705,11 +705,11 @@ class _HttpClientResponse extends _HttpInboundMessageListInt
       if (onError == null) {
         return;
       }
-      if (onError is void Function(Object)) {
-        onError(e);
-      } else {
-        assert(onError is void Function(Object, StackTrace));
+      if (onError is void Function(Object, StackTrace)) {
         onError(e, st);
+      } else {
+        assert(onError is void Function(Object));
+        onError(e);
       }
     }, onDone: () {
       _profileData?.finishResponse();
@@ -784,15 +784,16 @@ class _HttpClientResponse extends _HttpInboundMessageListInt
           return new Future.value(false);
         }
         var proxy = _httpRequest._proxy;
-        return authenticateProxy(
-            proxy.host, proxy.port, scheme.toString(), realm);
-      } else {
-        var authenticate = _httpClient._authenticate;
-        if (authenticate == null) {
-          return new Future.value(false);
+        if (!proxy.isDirect) {
+          return authenticateProxy(
+              proxy.host!, proxy.port!, scheme.toString(), realm);
         }
-        return authenticate(_httpRequest.uri, scheme.toString(), realm);
       }
+      var authenticate = _httpClient._authenticate;
+      if (authenticate == null) {
+        return new Future.value(false);
+      }
+      return authenticate(_httpRequest.uri, scheme.toString(), realm);
     }
 
     List<String> challenge = authChallenge()!;
@@ -1582,7 +1583,11 @@ class _HttpClientRequest extends _HttpOutboundMessage<HttpClientResponse>
     headers._finalize();
 
     // Write headers.
-    headers._build(buffer);
+    headers._build(buffer,
+        skipZeroContentLength: method == "CONNECT" ||
+            method == "DELETE" ||
+            method == "GET" ||
+            method == "HEAD");
     buffer.addByte(_CharCode.CR);
     buffer.addByte(_CharCode.LF);
     Uint8List headerBytes = buffer.takeBytes();
@@ -2499,9 +2504,10 @@ class _HttpClient implements HttpClient {
   final List<_Credentials> _credentials = [];
   final List<_ProxyCredentials> _proxyCredentials = [];
   final SecurityContext? _context;
-  Function? _authenticate;
-  Function? _authenticateProxy;
-  Function? _findProxy = HttpClient.findProxyFromEnvironment;
+  Future<bool> Function(Uri, String scheme, String? realm)? _authenticate;
+  Future<bool> Function(String host, int port, String scheme, String? realm)?
+      _authenticateProxy;
+  String Function(Uri)? _findProxy = HttpClient.findProxyFromEnvironment;
   Duration _idleTimeout = const Duration(seconds: 15);
   BadCertificateCallback? _badCertificateCallback;
 
@@ -2600,7 +2606,7 @@ class _HttpClient implements HttpClient {
         !force || !_connectionTargets.values.any((s) => s._active.isNotEmpty));
   }
 
-  set authenticate(Future<bool> f(Uri url, String scheme, String realm)?) {
+  set authenticate(Future<bool> f(Uri url, String scheme, String? realm)?) {
     _authenticate = f;
   }
 
@@ -2610,7 +2616,7 @@ class _HttpClient implements HttpClient {
   }
 
   set authenticateProxy(
-      Future<bool> f(String host, int port, String scheme, String realm)?) {
+      Future<bool> f(String host, int port, String scheme, String? realm)?) {
     _authenticateProxy = f;
   }
 
@@ -2628,22 +2634,6 @@ class _HttpClient implements HttpClient {
       'method': method.toUpperCase(),
       'uri': uri.toString(),
     });
-  }
-
-  /// Whether HTTP requests are currently allowed.
-  ///
-  /// If the [Zone] variable `#dart.library.io.allow_http` is set to a boolean,
-  /// it determines whether the HTTP protocol is allowed. If the zone variable
-  /// is set to any other non-null value, HTTP is not allowed.
-  /// Otherwise, if the `dart.library.io.allow_http` environment flag
-  /// is set to `false`, HTTP is not allowed.
-  /// Otherwise, [_embedderAllowsHttp] determines the result.
-  bool get _isHttpAllowed {
-    final zoneOverride = Zone.current[#dart.library.io.allow_http];
-    if (zoneOverride != null) return true == zoneOverride;
-    bool envOverride =
-        bool.fromEnvironment("dart.library.io.allow_http", defaultValue: true);
-    return envOverride && _embedderAllowsHttp;
   }
 
   bool _isLoopback(String host) {
@@ -2676,11 +2666,9 @@ class _HttpClient implements HttpClient {
       }
     }
 
+    _httpConnectionHook(uri);
+
     bool isSecure = uri.isScheme("https");
-    if (!_isHttpAllowed && !isSecure && !_isLoopback(uri.host)) {
-      throw new StateError(
-          "Insecure HTTP is not allowed by the current platform: $uri");
-    }
 
     int port = uri.port;
     if (port == 0) {
@@ -2808,8 +2796,8 @@ class _HttpClient implements HttpClient {
       _HttpProfileData? profileData) {
     Iterator<_Proxy> proxies = proxyConf.proxies.iterator;
 
-    Future<_ConnectionInfo> connect(error) {
-      if (!proxies.moveNext()) return new Future.error(error);
+    Future<_ConnectionInfo> connect(error, stackTrace) {
+      if (!proxies.moveNext()) return new Future.error(error, stackTrace);
       _Proxy proxy = proxies.current;
       String host = proxy.isDirect ? uriHost : proxy.host!;
       int port = proxy.isDirect ? uriPort : proxy.port!;
@@ -2819,7 +2807,7 @@ class _HttpClient implements HttpClient {
           .catchError(connect);
     }
 
-    return connect(new HttpException("No proxies given"));
+    return connect(new HttpException("No proxies given"), StackTrace.current);
   }
 
   _SiteCredentials? _findCredentials(Uri url, [_AuthenticationScheme? scheme]) {

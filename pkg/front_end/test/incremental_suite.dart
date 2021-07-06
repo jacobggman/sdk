@@ -23,7 +23,9 @@ import 'package:expect/expect.dart' show Expect;
 
 import 'package:front_end/src/api_prototype/compiler_options.dart'
     show CompilerOptions, parseExperimentalArguments, parseExperimentalFlags;
-import 'package:front_end/src/api_prototype/experimental_flags.dart';
+
+import 'package:front_end/src/api_prototype/experimental_flags.dart'
+    show ExperimentalFlag, experimentEnabledVersion;
 
 import "package:front_end/src/api_prototype/memory_file_system.dart"
     show MemoryFileSystem;
@@ -46,20 +48,23 @@ import 'package:front_end/src/fasta/incremental_compiler.dart'
 
 import 'package:front_end/src/fasta/incremental_serializer.dart'
     show IncrementalSerializer;
-import 'package:front_end/src/fasta/kernel/kernel_api.dart';
 
 import 'package:front_end/src/fasta/kernel/utils.dart' show ByteSink;
+
 import 'package:kernel/ast.dart';
 
 import 'package:kernel/binary/ast_from_binary.dart' show BinaryBuilder;
 
 import 'package:kernel/binary/ast_to_binary.dart' show BinaryPrinter;
-import 'package:kernel/class_hierarchy.dart';
+
+import 'package:kernel/class_hierarchy.dart'
+    show ClassHierarchy, ClosedWorldClassHierarchy, ForTestingClassInfo;
 
 import 'package:kernel/target/targets.dart'
     show NoneTarget, LateLowering, Target, TargetFlags;
 
-import 'package:kernel/text/ast_to_text.dart' show Printer, componentToString;
+import 'package:kernel/text/ast_to_text.dart'
+    show NameSystem, Printer, componentToString;
 
 import "package:testing/testing.dart"
     show Chain, ChainContext, Expectation, Result, Step, TestDescription, runMe;
@@ -435,6 +440,8 @@ class NewWorldTest {
     }
 
     int worldNum = 0;
+    // TODO: When needed, we can do this for warnings too.
+    List<Set<String>> worldErrors = [];
     for (YamlMap world in worlds) {
       worldNum++;
       print("----------------");
@@ -886,6 +893,18 @@ class NewWorldTest {
       }
       List<int> incrementalSerializationBytes = serializationResult.output;
 
+      worldErrors.add(formattedErrors.toSet());
+      assert(worldErrors.length == worldNum);
+      if (world["expectSameErrorsAsWorld"] != null) {
+        int expectSameErrorsAsWorld = world["expectSameErrorsAsWorld"];
+        checkErrorsAndWarnings(
+          worldErrors[expectSameErrorsAsWorld - 1],
+          formattedErrors,
+          {},
+          {},
+        );
+      }
+
       Set<String> prevFormattedErrors = formattedErrors.toSet();
       Set<String> prevFormattedWarnings = formattedWarnings.toSet();
 
@@ -981,7 +1000,9 @@ class NewWorldTest {
         }
       }
 
-      if (!noFullComponent && incrementalSerialization == true) {
+      if (!noFullComponent &&
+          (incrementalSerialization == true ||
+              world["compareWithFromScratch"] == true)) {
         // Do compile from scratch and compare.
         clearPrevErrorsEtc();
         TestIncrementalCompiler compilerFromScratch;
@@ -1017,9 +1038,12 @@ class NewWorldTest {
         await util.throwOnInsufficientUriToSource(component3);
         print("Compile took ${stopwatch.elapsedMilliseconds} ms");
 
-        util.postProcess(component3);
+        List<int> thisWholeComponent = util.postProcess(component3);
         print("*****\n\ncomponent3:\n"
             "${componentToStringSdkFiltered(component3)}\n\n\n");
+        if (world["compareWithFromScratch"] == true) {
+          checkIsEqual(newestWholeComponentData, thisWholeComponent);
+        }
         checkErrorsAndWarnings(prevFormattedErrors, formattedErrors,
             prevFormattedWarnings, formattedWarnings);
 
@@ -1059,6 +1083,11 @@ class NewWorldTest {
       component = null;
       component2 = null;
       component3 = null;
+      // Dummy tree nodes can (currently) leak though the parent pointer.
+      // To avoid that (here) (for leak testing) we'll null them out.
+      for (TreeNode treeNode in dummyTreeNodes) {
+        treeNode.parent = null;
+      }
 
       if (context.breakBetween) {
         debugger();

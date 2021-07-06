@@ -48,7 +48,6 @@ class AstResolver {
     _errorListener,
     featureSet: _featureSet,
     nameScope: _nameScope,
-    reportConstEvaluationErrors: false,
     flowAnalysisHelper: _flowAnalysis,
   );
 
@@ -57,6 +56,7 @@ class AstResolver {
       : _featureSet = node.thisOrAncestorOfType<CompilationUnit>()!.featureSet;
 
   void resolveAnnotation(AnnotationImpl node) {
+    _resolverVisitor.shouldCloneAnnotations = false;
     node.accept(_resolutionVisitor);
     node.accept(_variableResolverVisitor);
     _prepareEnclosingDeclarations();

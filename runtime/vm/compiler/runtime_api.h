@@ -298,14 +298,16 @@ static_assert(dart::kWordSize >= kWordSize,
               "Host word size smaller than target word size");
 #endif
 
+#if defined(DART_COMPRESSED_POINTERS)
+static constexpr int kCompressedWordSize = kInt32Size;
+static constexpr int kCompressedWordSizeLog2 = kInt32SizeLog2;
+#else
+static constexpr int kCompressedWordSize = kWordSize;
+static constexpr int kCompressedWordSizeLog2 = kWordSizeLog2;
+#endif
+
 static constexpr word kBitsPerWordLog2 = kWordSizeLog2 + kBitsPerByteLog2;
 static constexpr word kBitsPerWord = 1 << kBitsPerWordLog2;
-
-#if !defined(DART_COMPRESSED_POINTERS)
-static constexpr int kCompressedWordSize = kWordSize;
-#else
-static constexpr int kCompressedWordSize = sizeof(uint32_t);
-#endif
 
 using ObjectAlignment = dart::ObjectAlignment<kWordSize, kWordSizeLog2>;
 
@@ -697,8 +699,9 @@ class FunctionType : public AllStatic {
  public:
   static word hash_offset();
   static word type_state_offset();
-  static word packed_fields_offset();
-  static word parameter_names_offset();
+  static word packed_parameter_counts_offset();
+  static word packed_type_parameter_counts_offset();
+  static word named_parameter_names_offset();
   static word parameter_types_offset();
   static word type_parameters_offset();
   static word nullability_offset();
@@ -886,6 +889,12 @@ class ContextScope : public AllStatic {
  public:
   static word element_offset(intptr_t index);
   static word InstanceSize(intptr_t length);
+  static word InstanceSize();
+  static word NextFieldOffset();
+};
+
+class Sentinel : public AllStatic {
+ public:
   static word InstanceSize();
   static word NextFieldOffset();
 };
@@ -1268,7 +1277,7 @@ class SubtypeTestCache : public AllStatic {
   static word cache_offset();
 
   static const word kTestEntryLength;
-  static const word kInstanceClassIdOrFunction;
+  static const word kInstanceCidOrSignature;
   static const word kDestinationType;
   static const word kInstanceTypeArguments;
   static const word kInstantiatorTypeArguments;
@@ -1301,6 +1310,7 @@ class Closure : public AllStatic {
  public:
   static word context_offset();
   static word delayed_type_arguments_offset();
+  static word entry_point_offset();
   static word function_offset();
   static word function_type_arguments_offset();
   static word instantiator_type_arguments_offset();

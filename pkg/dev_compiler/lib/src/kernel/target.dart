@@ -93,6 +93,7 @@ class DevCompilerTarget extends Target {
         'dart:collection',
         'dart:html',
         'dart:indexed_db',
+        'dart:js',
         'dart:js_util',
         'dart:math',
         'dart:svg',
@@ -158,7 +159,7 @@ class DevCompilerTarget extends Target {
       {void Function(String msg) logger,
       ChangedStructureNotifier changedStructureNotifier}) {
     _nativeClasses ??= JsInteropChecks.getNativeClasses(component);
-    var jsUtilOptimizer = JsUtilOptimizer(coreTypes);
+    var jsUtilOptimizer = JsUtilOptimizer(coreTypes, hierarchy);
     for (var library in libraries) {
       _CovarianceTransformer(library).transform();
       jsUtilOptimizer.visitLibrary(library);

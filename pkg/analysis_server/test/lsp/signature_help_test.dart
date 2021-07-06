@@ -16,6 +16,12 @@ void main() {
 }
 
 mixin SignatureHelpMixin on AbstractLspAnalysisServerTest {
+  Future<void> expectNoSignature(String fileContent) async {
+    final res =
+        await getSignatureHelp(mainFileUri, positionFromMarker(fileContent));
+    expect(res, isNull);
+  }
+
   Future<void> testSignature(
     String fileContent,
     String expectedLabel,
@@ -247,6 +253,22 @@ void f() {
         ));
   }
 
+  Future<void> test_noDefaultConstructor() async {
+    final content = '''
+    class A {
+      A._();
+    }
+
+    final a = A(^);
+    ''';
+
+    await initialize(
+        textDocumentCapabilities: withSignatureHelpContentFormat(
+            emptyTextDocumentClientCapabilities, [MarkupKind.Markdown]));
+    await openFile(mainFileUri, withoutMarkers(content));
+    await expectNoSignature(content);
+  }
+
   Future<void> test_nonDartFile() async {
     await initialize(
         textDocumentCapabilities: withSignatureHelpContentFormat(
@@ -441,6 +463,86 @@ void f() {
           triggerKind: SignatureHelpTriggerKind.Invoked,
           isRetrigger: false,
         ));
+  }
+
+  Future<void> test_typeParams_class() async {
+    final content = '''
+    /// My Foo.
+    class Foo<T1, T2 extends String> {}
+
+    class Bar extends Foo<^> {}
+    ''';
+
+    const expectedLabel = 'class Foo<T1, T2 extends String>';
+    const expectedDoc = 'My Foo.';
+
+    await initialize(
+        textDocumentCapabilities: withSignatureHelpContentFormat(
+            emptyTextDocumentClientCapabilities, [MarkupKind.Markdown]));
+    await openFile(mainFileUri, withoutMarkers(content));
+    await testSignature(
+      content,
+      expectedLabel,
+      expectedDoc,
+      [
+        ParameterInformation(label: 'T1'),
+        ParameterInformation(label: 'T2 extends String'),
+      ],
+    );
+  }
+
+  Future<void> test_typeParams_function() async {
+    final content = '''
+    /// My Foo.
+    void foo<T1, T2 extends String>() {
+      foo<^>();
+    }
+    ''';
+
+    const expectedLabel = 'void foo<T1, T2 extends String>()';
+    const expectedDoc = 'My Foo.';
+
+    await initialize(
+        textDocumentCapabilities: withSignatureHelpContentFormat(
+            emptyTextDocumentClientCapabilities, [MarkupKind.Markdown]));
+    await openFile(mainFileUri, withoutMarkers(content));
+    await testSignature(
+      content,
+      expectedLabel,
+      expectedDoc,
+      [
+        ParameterInformation(label: 'T1'),
+        ParameterInformation(label: 'T2 extends String'),
+      ],
+    );
+  }
+
+  Future<void> test_typeParams_method() async {
+    final content = '''
+    class Foo {
+      /// My Foo.
+      void foo<T1, T2 extends String>() {
+        foo<^>();
+      }
+    }
+    ''';
+
+    const expectedLabel = 'void foo<T1, T2 extends String>()';
+    const expectedDoc = 'My Foo.';
+
+    await initialize(
+        textDocumentCapabilities: withSignatureHelpContentFormat(
+            emptyTextDocumentClientCapabilities, [MarkupKind.Markdown]));
+    await openFile(mainFileUri, withoutMarkers(content));
+    await testSignature(
+      content,
+      expectedLabel,
+      expectedDoc,
+      [
+        ParameterInformation(label: 'T1'),
+        ParameterInformation(label: 'T2 extends String'),
+      ],
+    );
   }
 
   Future<void> test_unopenFile() async {

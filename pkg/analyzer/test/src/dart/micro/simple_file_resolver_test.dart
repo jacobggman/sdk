@@ -235,7 +235,7 @@ int b = a;
   }
 
   test_analysisOptions_file_inPackage() async {
-    newFile('/workspace/dart/test/analysis_options.yaml', content: r'''
+    newAnalysisOptionsYamlFile('/workspace/dart/test', content: r'''
 analyzer:
   strong-mode:
     implicit-casts: false
@@ -257,8 +257,7 @@ analyzer:
     implicit-casts: false
 ''');
 
-    newFile('/workspace/thid_party/dart/aaa/analysis_options.yaml',
-        content: r'''
+    newAnalysisOptionsYamlFile('/workspace/third_party/dart/aaa', content: r'''
 analyzer:
   strong-mode:
     implicit-casts: true
@@ -281,7 +280,7 @@ analyzer:
     implicit-casts: false
 ''');
 
-    newFile('/workspace/thid_party/dart_lang/aaa/analysis_options.yaml',
+    newAnalysisOptionsYamlFile('/workspace/third_party/dart_lang/aaa',
         content: r'''
 analyzer:
   strong-mode:
@@ -463,7 +462,7 @@ class A {
   void func() {
    print('hello');
  }
- 
+
  void func2() {
    func();
  }
@@ -483,7 +482,7 @@ main() {
     await resolveFile(bPath);
     var result = fileResolver.findReferences(17, aPath);
     var expected = <CiderSearchMatch>[
-      CiderSearchMatch(aPath, [17, 69]),
+      CiderSearchMatch(aPath, [17, 68]),
       CiderSearchMatch(bPath, [46])
     ];
     expect(result, unorderedEquals(expected));
@@ -593,14 +592,14 @@ void func() {
     newFile(aPath, content: r'''
 class Foo<T> {
   List<T> l;
-  
+
   void bar(T t) {}
 }
 ''');
     await resolveFile(aPath);
     var result = fileResolver.findReferences(10, aPath);
     var expected = <CiderSearchMatch>[
-      CiderSearchMatch(aPath, [10, 22, 42])
+      CiderSearchMatch(aPath, [10, 22, 40])
     ];
     expect(result.map((e) => e.path),
         unorderedEquals(expected.map((e) => e.path)));
@@ -729,14 +728,14 @@ class A {}
     var element = fileResolver.getLibraryByUri(
       uriStr: 'package:dart.my/a.dart',
     );
-    expect(element.definingCompilationUnit.types, hasLength(1));
+    expect(element.definingCompilationUnit.classes, hasLength(1));
   }
 
   test_getLibraryByUri_notExistingFile() {
     var element = fileResolver.getLibraryByUri(
       uriStr: 'package:dart.my/a.dart',
     );
-    expect(element.definingCompilationUnit.types, isEmpty);
+    expect(element.definingCompilationUnit.classes, isEmpty);
   }
 
   test_getLibraryByUri_partOf() {
@@ -790,6 +789,63 @@ var foo = 0;
       error(CompileTimeErrorCode.UNDEFINED_IDENTIFIER, 8, 1),
     ]);
     expect(result.lineInfo.lineStarts, [0, 11, 24]);
+  }
+
+  test_nameOffset_class_method_fromBytes() async {
+    newFile('/workspace/dart/test/lib/a.dart', content: r'''
+class A {
+  void foo() {}
+}
+''');
+
+    addTestFile(r'''
+import 'a.dart';
+
+void f(A a) {
+  a.foo();
+}
+''');
+
+    await resolveTestFile();
+    {
+      var element = findNode.simple('foo();').staticElement!;
+      expect(element.nameOffset, 17);
+    }
+
+    // New resolver.
+    // Element models will be loaded from the cache.
+    createFileResolver();
+    await resolveTestFile();
+    {
+      var element = findNode.simple('foo();').staticElement!;
+      expect(element.nameOffset, 17);
+    }
+  }
+
+  test_nameOffset_unit_variable_fromBytes() async {
+    newFile('/workspace/dart/test/lib/a.dart', content: r'''
+var a = 0;
+''');
+
+    addTestFile(r'''
+import 'a.dart';
+var b = a;
+''');
+
+    await resolveTestFile();
+    {
+      var element = findNode.simple('a;').staticElement!;
+      expect(element.nonSynthetic.nameOffset, 4);
+    }
+
+    // New resolver.
+    // Element models will be loaded from the cache.
+    createFileResolver();
+    await resolveTestFile();
+    {
+      var element = findNode.simple('a;').staticElement!;
+      expect(element.nonSynthetic.nameOffset, 4);
+    }
   }
 
   test_nullSafety_enabled() async {
@@ -1057,14 +1113,14 @@ int b = a;
 
   test_reuse_incompatibleOptions_implicitCasts() async {
     newFile('/workspace/dart/aaa/BUILD', content: '');
-    newFile('/workspace/dart/aaa/analysis_options.yaml', content: r'''
+    newAnalysisOptionsYamlFile('/workspace/dart/aaa', content: r'''
 analyzer:
   strong-mode:
     implicit-casts: false
 ''');
 
     newFile('/workspace/dart/bbb/BUILD', content: '');
-    newFile('/workspace/dart/bbb/analysis_options.yaml', content: r'''
+    newAnalysisOptionsYamlFile('/workspace/dart/bbb', content: r'''
 analyzer:
   strong-mode:
     implicit-casts: true

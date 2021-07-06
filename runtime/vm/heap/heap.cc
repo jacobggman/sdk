@@ -163,6 +163,9 @@ void Heap::AllocatedExternal(intptr_t size, Space space) {
   }
 
   if (old_space_.ReachedHardThreshold()) {
+    if (last_gc_was_old_space_) {
+      CollectNewSpaceGarbage(Thread::Current(), kFull);
+    }
     CollectGarbage(kMarkSweep, kExternal);
   } else {
     CheckStartConcurrentMarking(Thread::Current(), kExternal);
@@ -887,6 +890,17 @@ void Heap::SetWeakEntry(ObjectPtr raw_obj, WeakSelector sel, intptr_t val) {
   } else {
     ASSERT(raw_obj->IsSmiOrOldObject());
     old_weak_tables_[sel]->SetValue(raw_obj, val);
+  }
+}
+
+intptr_t Heap::SetWeakEntryIfNonExistent(ObjectPtr raw_obj,
+                                         WeakSelector sel,
+                                         intptr_t val) {
+  if (!raw_obj->IsSmiOrOldObject()) {
+    return new_weak_tables_[sel]->SetValueIfNonExistent(raw_obj, val);
+  } else {
+    ASSERT(raw_obj->IsSmiOrOldObject());
+    return old_weak_tables_[sel]->SetValueIfNonExistent(raw_obj, val);
   }
 }
 

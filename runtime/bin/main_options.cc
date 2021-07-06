@@ -10,6 +10,7 @@
 
 #include "bin/dartdev_isolate.h"
 #include "bin/error_exit.h"
+#include "bin/file_system_watcher.h"
 #include "bin/options.h"
 #include "bin/platform.h"
 #include "bin/utils.h"
@@ -27,7 +28,7 @@ namespace dart {
 namespace bin {
 
 // These strings must match the enum SnapshotKind in main_options.h.
-static const char* kSnapshotKindNames[] = {
+static const char* const kSnapshotKindNames[] = {
     "none",
     "kernel",
     "app-jit",
@@ -35,7 +36,7 @@ static const char* kSnapshotKindNames[] = {
 };
 
 // These strings must match the enum VerbosityLevel in main_options.h.
-static const char* kVerbosityLevelNames[] = {
+static const char* const kVerbosityLevelNames[] = {
     "error", "warning", "info", "all", nullptr,
 };
 
@@ -155,6 +156,7 @@ void Options::PrintUsage() {
 "  set of options which are often useful for debugging under Observatory.\n"
 "  These options are currently:\n"
 "      --enable-vm-service[=<port>[/<bind-address>]]\n"
+"      --serve-devtools\n"
 "      --pause-isolates-on-exit\n"
 "      --pause-isolates-on-unhandled-exceptions\n"
 "      --warn-on-pause-with-no-debugger\n"
@@ -191,6 +193,7 @@ void Options::PrintUsage() {
 "  set of options which are often useful for debugging under Observatory.\n"
 "  These options are currently:\n"
 "      --enable-vm-service[=<port>[/<bind-address>]]\n"
+"      --serve-devtools\n"
 "      --pause-isolates-on-exit\n"
 "      --pause-isolates-on-unhandled-exceptions\n"
 "      --warn-on-pause-with-no-debugger\n"
@@ -222,13 +225,13 @@ void Options::PrintUsage() {
 "--root-certs-cache=<path>\n"
 "  The path to a cache directory containing the trusted root certificates to\n"
 "  use for secure socket connections.\n"
-#if defined(HOST_OS_LINUX) || \
-    defined(HOST_OS_ANDROID) || \
-    defined(HOST_OS_FUCHSIA)
+#if defined(DART_HOST_OS_LINUX) || \
+    defined(DART_HOST_OS_ANDROID) || \
+    defined(DART_HOST_OS_FUCHSIA)
 "--namespace=<path>\n"
 "  The path to a directory that dart:io calls will treat as the root of the\n"
 "  filesystem.\n"
-#endif  // defined(HOST_OS_LINUX) || defined(HOST_OS_ANDROID)
+#endif  // defined(DART_HOST_OS_LINUX) || defined(DART_HOST_OS_ANDROID)
 "\n"
 "The following options are only used for VM development and may\n"
 "be changed in any future version:\n");
@@ -416,6 +419,7 @@ bool Options::ParseArguments(int argc,
 
   bool enable_dartdev_analytics = false;
   bool disable_dartdev_analytics = false;
+  bool serve_devtools = true;
 
   // Parse out the vm options.
   while (i < argc) {
@@ -443,6 +447,12 @@ bool Options::ParseArguments(int argc,
         // Just add this option even if we don't go to dartdev.
         // It is irelevant for the vm.
         dart_options->AddArgument("--no-analytics");
+        skipVmOption = true;
+      } else if (IsOption(argv[i], "serve-devtools")) {
+        serve_devtools = true;
+        skipVmOption = true;
+      } else if (IsOption(argv[i], "no-serve-devtools")) {
+        serve_devtools = false;
         skipVmOption = true;
       }
       if (!skipVmOption) {
@@ -473,6 +483,9 @@ bool Options::ParseArguments(int argc,
   SSLCertContext::set_bypass_trusting_system_roots(
       Options::bypass_trusting_system_roots());
 #endif  // !defined(DART_IO_SECURE_SOCKET_DISABLED)
+
+  FileSystemWatcher::set_delayed_filewatch_callback(
+      Options::delayed_filewatch_callback());
 
   // The arguments to the VM are at positions 1 through i-1 in argv.
   Platform::SetExecutableArguments(i, argv);
@@ -571,6 +584,16 @@ bool Options::ParseArguments(int argc,
       // run command. If 'run' is provided, it will be the first argument
       // processed in this loop.
       dart_options->AddArgument("run");
+
+      // Ensure we can enable / disable DevTools when invoking 'dart run'
+      // implicitly.
+      if (enable_vm_service_) {
+        if (serve_devtools) {
+          dart_options->AddArgument("--serve-devtools");
+        } else {
+          dart_options->AddArgument("--no-serve-devtools");
+        }
+      }
     } else {
       dart_options->AddArgument(argv[i]);
       i++;

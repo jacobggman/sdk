@@ -34,10 +34,8 @@ class BundleReader {
 
   final Map<String, LibraryReader> libraryMap = {};
 
-  /// TODO(scheglov) Remove [astBytes].
   BundleReader({
     required LinkedElementFactory elementFactory,
-    Uint8List? astBytes, // ignore: avoid_unused_constructor_parameters
     required Uint8List resolutionBytes,
     Map<Uri, Uint8List> unitsInformativeBytes = const {},
   })  : _reader = SummaryDataReader(resolutionBytes),
@@ -83,6 +81,7 @@ class BundleReader {
 }
 
 class ClassElementLinkedData extends ElementLinkedData<ClassElementImpl> {
+  ApplyConstantOffsets? applyConstantOffsets;
   void Function()? _readMembers;
   void Function()? applyInformativeDataToMembers;
 
@@ -119,11 +118,14 @@ class ClassElementLinkedData extends ElementLinkedData<ClassElementImpl> {
     element.supertype = reader._readOptionalInterfaceType();
     element.mixins = reader._readInterfaceTypeList();
     element.interfaces = reader._readInterfaceTypeList();
+    applyConstantOffsets?.perform();
   }
 }
 
 class CompilationUnitElementLinkedData
     extends ElementLinkedData<CompilationUnitElementImpl> {
+  ApplyConstantOffsets? applyConstantOffsets;
+
   CompilationUnitElementLinkedData({
     required Reference reference,
     required LibraryReader libraryReader,
@@ -136,11 +138,14 @@ class CompilationUnitElementLinkedData
     element.metadata = reader._readAnnotationList(
       unitElement: unitElement,
     );
+    applyConstantOffsets?.perform();
   }
 }
 
 class ConstructorElementLinkedData
     extends ElementLinkedData<ConstructorElementImpl> {
+  ApplyConstantOffsets? applyConstantOffsets;
+
   ConstructorElementLinkedData({
     required Reference reference,
     required LibraryReader libraryReader,
@@ -162,6 +167,7 @@ class ConstructorElementLinkedData
           reader.readElement() as ConstructorElement?;
       element.constantInitializers = reader._readNodeList();
     }
+    applyConstantOffsets?.perform();
   }
 }
 
@@ -258,6 +264,8 @@ abstract class ElementLinkedData<E extends ElementImpl> {
 }
 
 class EnumElementLinkedData extends ElementLinkedData<EnumElementImpl> {
+  ApplyConstantOffsets? applyConstantOffsets;
+
   EnumElementLinkedData({
     required Reference reference,
     required LibraryReader libraryReader,
@@ -285,11 +293,15 @@ class EnumElementLinkedData extends ElementLinkedData<EnumElementImpl> {
         unitElement: element.enclosingElement,
       );
     }
+
+    applyConstantOffsets?.perform();
   }
 }
 
 class ExtensionElementLinkedData
     extends ElementLinkedData<ExtensionElementImpl> {
+  ApplyConstantOffsets? applyConstantOffsets;
+
   ExtensionElementLinkedData({
     required Reference reference,
     required LibraryReader libraryReader,
@@ -304,10 +316,13 @@ class ExtensionElementLinkedData
     );
     _readTypeParameters(reader, element.typeParameters);
     element.extendedType = reader.readRequiredType();
+    applyConstantOffsets?.perform();
   }
 }
 
 class FieldElementLinkedData extends ElementLinkedData<FieldElementImpl> {
+  ApplyConstantOffsets? applyConstantOffsets;
+
   FieldElementLinkedData({
     required Reference reference,
     required LibraryReader libraryReader,
@@ -329,10 +344,13 @@ class FieldElementLinkedData extends ElementLinkedData<FieldElementImpl> {
         ConstantContextForExpressionImpl(initializer);
       }
     }
+    applyConstantOffsets?.perform();
   }
 }
 
 class FunctionElementLinkedData extends ElementLinkedData<FunctionElementImpl> {
+  ApplyConstantOffsets? applyConstantOffsets;
+
   FunctionElementLinkedData({
     required Reference reference,
     required LibraryReader libraryReader,
@@ -348,10 +366,13 @@ class FunctionElementLinkedData extends ElementLinkedData<FunctionElementImpl> {
     _readTypeParameters(reader, element.typeParameters);
     element.returnType = reader.readRequiredType();
     _readFormalParameters(reader, element.parameters);
+    applyConstantOffsets?.perform();
   }
 }
 
 class LibraryElementLinkedData extends ElementLinkedData<LibraryElementImpl> {
+  ApplyConstantOffsets? applyConstantOffsets;
+
   LibraryElementLinkedData({
     required Reference reference,
     required LibraryReader libraryReader,
@@ -386,6 +407,8 @@ class LibraryElementLinkedData extends ElementLinkedData<LibraryElementImpl> {
     }
 
     element.entryPoint = reader.readElement() as FunctionElement?;
+
+    applyConstantOffsets?.perform();
   }
 }
 
@@ -402,7 +425,6 @@ class LibraryReader {
   int _classMembersLengthsIndex = 0;
 
   late List<Reference> exports;
-  var nextUnnamedExtensionId = 0;
 
   LibraryReader._({
     required LinkedElementFactory elementFactory,
@@ -532,7 +554,7 @@ class LibraryReader {
     Reference unitReference,
   ) {
     var length = _reader.readUInt30();
-    unitElement.types = List.generate(length, (index) {
+    unitElement.classes = List.generate(length, (index) {
       return _readClassElement(unitElement, unitReference);
     });
   }
@@ -614,7 +636,7 @@ class LibraryReader {
     for (var i = 0; i < constantCount; i++) {
       var constantName = _reader.readStringReference();
       var field = ConstFieldElementImpl_EnumValue(element, constantName, i);
-      var constantRef = containerRef.getChild(name);
+      var constantRef = containerRef.getChild(constantName);
       field.reference = constantRef;
       constantRef.element = field;
       fields.add(field);
@@ -655,7 +677,7 @@ class LibraryReader {
   ) {
     var resolutionOffset = _baseResolutionOffset + _reader.readUInt30();
     var name = _reader.readOptionalStringReference();
-    var refName = name ?? 'extension-${nextUnnamedExtensionId++}';
+    var refName = _reader.readStringReference();
     var reference = unitReference.getChild('@extension').getChild(refName);
 
     var element = ExtensionElementImpl(name, -1);
@@ -865,13 +887,13 @@ class LibraryReader {
 
     element.typeParameters = _readTypeParameters();
 
-    var accessors = <PropertyAccessorElement>[];
     var fields = <FieldElement>[];
+    var accessors = <PropertyAccessorElement>[];
+    _readFields(unitElement, element, reference, accessors, fields);
     _readPropertyAccessors(
         unitElement, element, reference, accessors, fields, '@field');
-    _readFields(unitElement, element, reference, accessors, fields);
-    element.accessors = accessors;
     element.fields = fields;
+    element.accessors = accessors;
 
     element.constructors = _readConstructors(unitElement, element, reference);
     element.methods = _readMethods(unitElement, element, reference);
@@ -1001,7 +1023,6 @@ class LibraryReader {
           property = existing;
         } else {
           var field = TopLevelVariableElementImpl(name, -1);
-          field.isFinal = true;
           property = field;
         }
       } else {
@@ -1010,7 +1031,6 @@ class LibraryReader {
           property = existing;
         } else {
           var field = FieldElementImpl(name, -1);
-          field.isFinal = true;
           field.isStatic = accessor.isStatic;
           property = field;
         }
@@ -1115,9 +1135,8 @@ class LibraryReader {
 
     TypeAliasElementImpl element;
     if (isFunctionTypeAliasBased) {
-      element =
-          // ignore: deprecated_member_use_from_same_package
-          FunctionTypeAliasElementImpl(name, -1);
+      element = TypeAliasElementImpl(name, -1);
+      element.isFunctionTypeAliasBased = true;
     } else {
       element = TypeAliasElementImpl(name, -1);
     }
@@ -1188,8 +1207,8 @@ class LibraryReader {
 
     unitElement.uri = _reader.readOptionalStringReference();
     unitElement.isSynthetic = _reader.readBool();
+    unitElement.sourceContent = _reader.readOptionalStringUtf8();
 
-    nextUnnamedExtensionId = 0;
     _readClasses(unitElement, unitReference);
     _readEnums(unitElement, unitReference);
     _readExtensions(unitElement, unitReference);
@@ -1225,6 +1244,8 @@ class LibraryReader {
 }
 
 class MethodElementLinkedData extends ElementLinkedData<MethodElementImpl> {
+  ApplyConstantOffsets? applyConstantOffsets;
+
   MethodElementLinkedData({
     required Reference reference,
     required LibraryReader libraryReader,
@@ -1241,10 +1262,13 @@ class MethodElementLinkedData extends ElementLinkedData<MethodElementImpl> {
     _readTypeParameters(reader, element.typeParameters);
     _readFormalParameters(reader, element.parameters);
     element.returnType = reader.readRequiredType();
+    applyConstantOffsets?.perform();
   }
 }
 
 class MixinElementLinkedData extends ElementLinkedData<MixinElementImpl> {
+  ApplyConstantOffsets? applyConstantOffsets;
+
   MixinElementLinkedData({
     required Reference reference,
     required LibraryReader libraryReader,
@@ -1260,11 +1284,14 @@ class MixinElementLinkedData extends ElementLinkedData<MixinElementImpl> {
     _readTypeParameters(reader, element.typeParameters);
     element.superclassConstraints = reader._readInterfaceTypeList();
     element.interfaces = reader._readInterfaceTypeList();
+    applyConstantOffsets?.perform();
   }
 }
 
 class PropertyAccessorElementLinkedData
     extends ElementLinkedData<PropertyAccessorElementImpl> {
+  ApplyConstantOffsets? applyConstantOffsets;
+
   PropertyAccessorElementLinkedData({
     required Reference reference,
     required LibraryReader libraryReader,
@@ -1282,6 +1309,8 @@ class PropertyAccessorElementLinkedData
 
     element.returnType = reader.readRequiredType();
     _readFormalParameters(reader, element.parameters);
+
+    applyConstantOffsets?.perform();
   }
 }
 
@@ -1347,6 +1376,17 @@ class ResolutionReader {
     }
 
     throw UnimplementedError('memberFlags: $memberFlags');
+  }
+
+  FunctionType? readOptionalFunctionType() {
+    var type = readType();
+    return type is FunctionType ? type : null;
+  }
+
+  List<DartType>? readOptionalTypeList() {
+    if (_reader.readBool()) {
+      return _readTypeList();
+    }
   }
 
   DartType readRequiredType() {
@@ -1535,6 +1575,7 @@ class ResolutionReader {
     return List.generate(formalParameterCount, (_) {
       var kindIndex = _reader.readByte();
       var kind = _formalParameterKind(kindIndex);
+      var hasImplicitType = _reader.readBool();
       var isInitializingFormal = _reader.readBool();
       var typeParameters = _readTypeParameters(unitElement);
       var type = readRequiredType();
@@ -1550,6 +1591,7 @@ class ResolutionReader {
             ..parameterKind = kind
             ..type = type;
         }
+        element.hasImplicitType = hasImplicitType;
         element.typeParameters = typeParameters;
         element.parameters = _readFormalParameters(unitElement);
         // TODO(scheglov) reuse for formal parameters
@@ -1562,6 +1604,7 @@ class ResolutionReader {
         var element = DefaultParameterElementImpl(name, -1)
           ..parameterKind = kind
           ..type = type;
+        element.hasImplicitType = hasImplicitType;
         element.typeParameters = typeParameters;
         element.parameters = _readFormalParameters(unitElement);
         // TODO(scheglov) reuse for formal parameters
@@ -1594,15 +1637,7 @@ class ResolutionReader {
   }
 
   InterfaceType _readInterfaceType() {
-    var element = _readRawElement() as ClassElement;
-    var typeArguments = _readTypeList();
-    var nullability = _readNullability();
-    var type = InterfaceTypeImpl(
-      element: element,
-      typeArguments: typeArguments,
-      nullabilitySuffix: nullability,
-    );
-    return type;
+    return readType() as InterfaceType;
   }
 
   List<InterfaceType> _readInterfaceTypeList() {
@@ -1632,10 +1667,7 @@ class ResolutionReader {
   }
 
   InterfaceType? _readOptionalInterfaceType() {
-    var hasSuperType = _reader.readByte() != 0;
-    if (hasSuperType) {
-      return _readInterfaceType();
-    }
+    return readType() as InterfaceType?;
   }
 
   Element? _readRawElement() {
@@ -1703,6 +1735,8 @@ class ResolutionReader {
 
 class TopLevelVariableElementLinkedData
     extends ElementLinkedData<TopLevelVariableElementImpl> {
+  ApplyConstantOffsets? applyConstantOffsets;
+
   TopLevelVariableElementLinkedData({
     required Reference reference,
     required LibraryReader libraryReader,
@@ -1723,11 +1757,14 @@ class TopLevelVariableElementLinkedData
         ConstantContextForExpressionImpl(initializer);
       }
     }
+    applyConstantOffsets?.perform();
   }
 }
 
 class TypeAliasElementLinkedData
     extends ElementLinkedData<TypeAliasElementImpl> {
+  ApplyConstantOffsets? applyConstantOffsets;
+
   TypeAliasElementLinkedData({
     required Reference reference,
     required LibraryReader libraryReader,
@@ -1743,6 +1780,7 @@ class TypeAliasElementLinkedData
     _readTypeParameters(reader, element.typeParameters);
     element.aliasedElement = reader._readAliasedElement(unitElement);
     element.aliasedType = reader.readRequiredType();
+    applyConstantOffsets?.perform();
   }
 }
 

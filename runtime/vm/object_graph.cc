@@ -821,7 +821,7 @@ class Pass1Visitor : public ObjectVisitor,
     if (obj->IsPseudoObject()) return;
 
     writer_->AssignObjectId(obj);
-    obj->untag()->VisitPointers(this);
+    obj->untag()->VisitPointersPrecise(isolate_group(), this);
   }
 
   void VisitPointers(ObjectPtr* from, ObjectPtr* to) {
@@ -938,15 +938,15 @@ class Pass2Visitor : public ObjectVisitor,
     } else if (cid == kArrayCid || cid == kImmutableArrayCid) {
       writer_->WriteUnsigned(kLengthData);
       writer_->WriteUnsigned(
-          Smi::Value(static_cast<ArrayPtr>(obj)->untag()->length_));
+          Smi::Value(static_cast<ArrayPtr>(obj)->untag()->length()));
     } else if (cid == kGrowableObjectArrayCid) {
       writer_->WriteUnsigned(kLengthData);
       writer_->WriteUnsigned(Smi::Value(
-          static_cast<GrowableObjectArrayPtr>(obj)->untag()->length_));
+          static_cast<GrowableObjectArrayPtr>(obj)->untag()->length()));
     } else if (cid == kLinkedHashMapCid) {
       writer_->WriteUnsigned(kLengthData);
       writer_->WriteUnsigned(
-          Smi::Value(static_cast<LinkedHashMapPtr>(obj)->untag()->used_data_));
+          Smi::Value(static_cast<LinkedHashMapPtr>(obj)->untag()->used_data()));
     } else if (cid == kObjectPoolCid) {
       writer_->WriteUnsigned(kLengthData);
       writer_->WriteUnsigned(static_cast<ObjectPoolPtr>(obj)->untag()->length_);
@@ -1312,6 +1312,7 @@ uint32_t HeapSnapshotWriter::GetHeapSnapshotIdentityHash(Thread* thread,
     case kLinkedHashMapCid:
     case kMintCid:
     case kNeverCid:
+    case kSentinelCid:
     case kNullCid:
     case kObjectPoolCid:
     case kOneByteStringCid:
@@ -1346,7 +1347,7 @@ uint32_t HeapSnapshotWriter::GetHashHelper(Thread* thread, ObjectPtr obj) {
   if (hash == 0) {
     ASSERT(!thread->heap()->old_space()->IsObjectFromImagePages(obj));
     hash = GenerateHash(thread->random());
-    Object::SetCachedHash(obj, hash);
+    Object::SetCachedHashIfNotSet(obj, hash);
   }
 #else
   Heap* heap = thread->heap();
@@ -1354,7 +1355,7 @@ uint32_t HeapSnapshotWriter::GetHashHelper(Thread* thread, ObjectPtr obj) {
   if (hash == 0) {
     ASSERT(!heap->old_space()->IsObjectFromImagePages(obj));
     hash = GenerateHash(thread->random());
-    heap->SetHash(obj, hash);
+    heap->SetHashIfNotSet(obj, hash);
   }
 #endif
   return hash;

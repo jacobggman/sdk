@@ -1148,7 +1148,7 @@ void main() {
   new F4(a: [[3]]);
   new F4(a: [["hello"]]);
   new F4(a: [["hello"], [3]]);
-  
+
   new F5([[[3]]]);
 }
 ''', [
@@ -1660,7 +1660,7 @@ class C {
   static int get _x => null;
 }
 ''');
-    var x = _resultUnitElement.types[0].fields[0];
+    var x = _resultUnitElement.classes[0].fields[0];
     _assertTypeStr(x.type, 'int');
   }
 
@@ -1671,7 +1671,7 @@ class C {
 }
 int get y => null;
 ''');
-    var x = _resultUnitElement.types[0].fields[0];
+    var x = _resultUnitElement.classes[0].fields[0];
     _assertTypeStr(x.type, 'int');
   }
 

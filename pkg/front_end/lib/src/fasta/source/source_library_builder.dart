@@ -213,8 +213,9 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
   // A library to use for Names generated when compiling code in this library.
   // This allows code generated in one library to use the private namespace of
   // another, for example during expression compilation (debugging).
-  Library get nameOrigin => _nameOrigin ?? library;
-  final Library _nameOrigin;
+  Library get nameOrigin => _nameOrigin?.library ?? library;
+  LibraryBuilder get nameOriginBuilder => _nameOrigin ?? this;
+  final LibraryBuilder _nameOrigin;
 
   final Library referencesFrom;
   final IndexedLibrary referencesFromIndexed;
@@ -264,7 +265,7 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
       Scope scope,
       SourceLibraryBuilder actualOrigin,
       Library library,
-      Library nameOrigin,
+      LibraryBuilder nameOrigin,
       Library referencesFrom,
       bool referenceIsPartOwner)
       : this.fromScopes(
@@ -313,10 +314,13 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
   bool _enableNonfunctionTypeAliasesInLibrary;
   bool _enableNonNullableInLibrary;
   Version _enableNonNullableVersionInLibrary;
+  Version _enableConstructorTearoffsVersionInLibrary;
+  Version _enableExtensionTypesVersionInLibrary;
   bool _enableTripleShiftInLibrary;
   bool _enableExtensionMethodsInLibrary;
   bool _enableGenericMetadataInLibrary;
   bool _enableExtensionTypesInLibrary;
+  bool _enableConstructorTearOffsInLibrary;
 
   bool get enableConstFunctionsInLibrary => _enableConstFunctionsInLibrary ??=
       loader.target.isExperimentEnabledInLibraryByVersion(
@@ -350,6 +354,18 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
           .getExperimentEnabledVersionInLibrary(
               ExperimentalFlag.nonNullable, _packageUri ?? importUri);
 
+  bool get enableConstructorTearOffsInLibrary =>
+      _enableConstructorTearOffsInLibrary ??= loader.target
+          .isExperimentEnabledInLibraryByVersion(
+              ExperimentalFlag.constructorTearoffs,
+              _packageUri ?? importUri,
+              languageVersion.version);
+
+  Version get enableConstructorTearOffsVersionInLibrary =>
+      _enableConstructorTearoffsVersionInLibrary ??= loader.target
+          .getExperimentEnabledVersionInLibrary(
+              ExperimentalFlag.constructorTearoffs, _packageUri ?? importUri);
+
   bool get enableTripleShiftInLibrary => _enableTripleShiftInLibrary ??=
       loader.target.isExperimentEnabledInLibraryByVersion(
           ExperimentalFlag.tripleShift,
@@ -374,6 +390,11 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
           ExperimentalFlag.extensionTypes,
           _packageUri ?? importUri,
           languageVersion.version);
+
+  Version get enableExtensionTypesVersionInLibrary =>
+      _enableExtensionTypesVersionInLibrary ??= loader.target
+          .getExperimentEnabledVersionInLibrary(
+              ExperimentalFlag.extensionTypes, _packageUri ?? importUri);
 
   void _updateLibraryNNBDSettings() {
     library.isNonNullableByDefault = isNonNullableByDefault;
@@ -402,7 +423,7 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
       SourceLibraryBuilder actualOrigin,
       {Scope scope,
       Library target,
-      Library nameOrigin,
+      LibraryBuilder nameOrigin,
       Library referencesFrom,
       bool referenceIsPartOwner})
       : this.internal(
@@ -716,6 +737,7 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
     String nativePath;
     const String nativeExtensionScheme = "dart-ext:";
     if (uri.startsWith(nativeExtensionScheme)) {
+      addProblem(messageDeprecateDartExt, charOffset, noLength, fileUri);
       String strippedUri = uri.substring(nativeExtensionScheme.length);
       if (strippedUri.startsWith("package")) {
         resolvedUri = resolve(this.importUri, strippedUri,
@@ -1847,6 +1869,7 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
       String extensionName,
       List<TypeVariableBuilder> typeVariables,
       TypeBuilder type,
+      bool isExtensionTypeDeclaration,
       int startOffset,
       int nameOffset,
       int endOffset) {
@@ -1880,6 +1903,7 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
         type,
         classScope,
         this,
+        isExtensionTypeDeclaration,
         startOffset,
         nameOffset,
         endOffset,
@@ -3509,23 +3533,43 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
         typeParameter = null;
       } else {
         if (issue.enclosingType == null && targetReceiver != null) {
-          if (issueInferred) {
-            message =
-                templateIncorrectTypeArgumentQualifiedInferred.withArguments(
-                    argument,
-                    typeParameter.bound,
-                    typeParameter.name,
-                    targetReceiver,
-                    targetName,
-                    isNonNullableByDefault);
+          if (targetName != null) {
+            if (issueInferred) {
+              message =
+                  templateIncorrectTypeArgumentQualifiedInferred.withArguments(
+                      argument,
+                      typeParameter.bound,
+                      typeParameter.name,
+                      targetReceiver,
+                      targetName,
+                      isNonNullableByDefault);
+            } else {
+              message = templateIncorrectTypeArgumentQualified.withArguments(
+                  argument,
+                  typeParameter.bound,
+                  typeParameter.name,
+                  targetReceiver,
+                  targetName,
+                  isNonNullableByDefault);
+            }
           } else {
-            message = templateIncorrectTypeArgumentQualified.withArguments(
-                argument,
-                typeParameter.bound,
-                typeParameter.name,
-                targetReceiver,
-                targetName,
-                isNonNullableByDefault);
+            if (issueInferred) {
+              message = templateIncorrectTypeArgumentInstantiationInferred
+                  .withArguments(
+                      argument,
+                      typeParameter.bound,
+                      typeParameter.name,
+                      targetReceiver,
+                      isNonNullableByDefault);
+            } else {
+              message =
+                  templateIncorrectTypeArgumentInstantiation.withArguments(
+                      argument,
+                      typeParameter.bound,
+                      typeParameter.name,
+                      targetReceiver,
+                      isNonNullableByDefault);
+            }
           }
         } else {
           String enclosingName = issue.enclosingType == null
@@ -3570,7 +3614,7 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
     // limitation of Kernel.
     if (typeParameter != null &&
         typeParameter.fileOffset != -1 &&
-        typeParameter.parent != null) {
+        typeParameter.location != null) {
       // It looks like when parameters come from patch files, they don't
       // have a reportable location.
       (context ??= <LocatedMessage>[]).add(
@@ -4022,6 +4066,41 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
         targetName: localName ?? 'call');
   }
 
+  void checkBoundsInInstantiation(
+      TypeEnvironment typeEnvironment,
+      ClassHierarchy hierarchy,
+      TypeInferrerImpl typeInferrer,
+      FunctionType functionType,
+      List<DartType> typeArguments,
+      Uri fileUri,
+      int offset,
+      {bool inferred}) {
+    assert(inferred != null);
+    if (typeArguments.isEmpty) return;
+
+    List<TypeParameter> functionTypeParameters = functionType.typeParameters;
+    // The error is to be reported elsewhere.
+    if (functionTypeParameters.length != typeArguments.length) return;
+    final DartType bottomType = isNonNullableByDefault
+        ? const NeverType.nonNullable()
+        : const NullType();
+    List<TypeArgumentIssue> issues = findTypeArgumentIssuesForInvocation(
+        functionTypeParameters,
+        typeArguments,
+        typeEnvironment,
+        isNonNullableByDefault
+            ? SubtypeCheckMode.withNullabilities
+            : SubtypeCheckMode.ignoringNullabilities,
+        bottomType,
+        isNonNullableByDefault: library.isNonNullableByDefault,
+        areGenericArgumentsAllowed: enableGenericMetadataInLibrary);
+    reportTypeArgumentIssues(issues, fileUri, offset,
+        targetReceiver: functionType,
+        typeArgumentsInfo: inferred
+            ? const AllInferredTypeArgumentsInfo()
+            : const NoneInferredTypeArgumentsInfo());
+  }
+
   void checkTypesInOutline(TypeEnvironment typeEnvironment) {
     Iterator<Builder> iterator = this.iterator;
     while (iterator.moveNext()) {
@@ -4069,10 +4148,18 @@ class SourceLibraryBuilder extends LibraryBuilderImpl {
   void forEachExtensionInScope(void Function(ExtensionBuilder) f) {
     if (_extensionsInScope == null) {
       _extensionsInScope = <ExtensionBuilder>{};
-      scope.forEachExtension(_extensionsInScope.add);
+      scope.forEachExtension((e) {
+        if (!e.extension.isExtensionTypeDeclaration) {
+          _extensionsInScope.add(e);
+        }
+      });
       if (_prefixBuilders != null) {
         for (PrefixBuilder prefix in _prefixBuilders) {
-          prefix.exportScope.forEachExtension(_extensionsInScope.add);
+          prefix.exportScope.forEachExtension((e) {
+            if (!e.extension.isExtensionTypeDeclaration) {
+              _extensionsInScope.add(e);
+            }
+          });
         }
       }
     }

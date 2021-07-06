@@ -1,4 +1,34 @@
-## 1.6.0-dev
+## 2.0.0-dev (Not yet released - breaking changes)
+* Removed deprecated `Scope.lookup2()`.
+* Removed deprecated setters in API of AST.
+* Removed deprecated `FunctionTypeAliasElement`.
+* Updated `LineInfo.getLocation()` to return `CharacterLocation`.
+* Removed deprecated `LineInfo_Location`.
+* Removed deprecated methods from `AnalysisSession`.
+* Changed `DartObject.type` from `ParameterizedType?` to `DartType?`.
+* Changed `FunctionType` to implement `DartType`, not `ParameterizedType`.
+* Removed `FunctionType.element` and `FunctionType.typeArguments`.
+* Changed `DartObject.type` from `ParameterizedType?` to `DartType?`.
+* Changed `FunctionType` to implement `DartType`, not `ParameterizedType`.
+* Removed `FunctionType.element` and `FunctionType.typeArguments`.
+
+## 1.8.0-dev
+* Added `StringInterpolation.firstString` and `lastString`, to express
+  explicitly  that there are always (possibly empty) strings as the first
+  and the last elements of an interpolation.
+* Deprecated `ImportElement.prefixOffset`, use `prefix.nameOffset` instead.
+* Deprecated `CompilationUnitElement.types`, use `classes` instead.
+* Added `Element.nonSynthetic`, use it to get the element that caused creation
+  of this element, e.g. the field for a synthetic getter.
+* `FieldElement.isFinal` is `true` only when the field is not synthetic.
+* Synthetic getters and setters now use `-1` as `nameOffset`.
+* Fixed bug that `defaultValueCode` is `null` for field formal parameters.
+* Updated `LibraryElement.name` so that it is non-nullable.
+
+## 1.7.0
+* Require `meta: ^1.4.0`.
+
+## 1.6.0
 * Deprecated `AnalysisDriver` default constructor.  Added `tmp1`. The goal
   is to allow deprecating and removing unused  parameters.
 * Added AST structures and visit methods to support the upcoming "constructor

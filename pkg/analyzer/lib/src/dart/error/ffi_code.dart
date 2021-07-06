@@ -23,6 +23,25 @@ class FfiCode extends AnalyzerErrorCode {
 
   /**
    * Parameters:
+   * 0: the name of the argument
+   */
+  static const FfiCode ARGUMENT_MUST_BE_A_CONSTANT = FfiCode(
+      name: 'ARGUMENT_MUST_BE_A_CONSTANT',
+      message: "Argument '{0}' must be a constant.",
+      correction: "Try replacing the value with a literal or const.");
+
+  /**
+   * No parameters.
+   */
+  static const FfiCode CREATION_OF_STRUCT_OR_UNION = FfiCode(
+    name: 'CREATION_OF_STRUCT_OR_UNION',
+    message: "Subclasses of 'Struct' and 'Union' are backed by native memory, "
+        "and can't be instantiated by a generative constructor.",
+    correction: "Try allocating it via allocation, or load from a 'Pointer'.",
+  );
+
+  /**
+   * Parameters:
    * 0: the name of the struct class
    */
   static const FfiCode EMPTY_STRUCT = FfiCode(
@@ -69,6 +88,15 @@ class FfiCode extends AnalyzerErrorCode {
           " external.");
 
   /**
+   * No parameters.
+   */
+  static const FfiCode FIELD_MUST_BE_EXTERNAL_IN_STRUCT = FfiCode(
+      name: 'FIELD_MUST_BE_EXTERNAL_IN_STRUCT',
+      message:
+          "Fields of 'Struct' and 'Union' subclasses must be marked external.",
+      correction: "Try adding the 'external' modifier.");
+
+  /**
    * Parameters:
    * 0: the name of the struct class
    */
@@ -102,6 +130,22 @@ class FfiCode extends AnalyzerErrorCode {
       correction:
           "Try using 'int', 'double', 'Array', 'Pointer', or subtype of "
           "'Struct' or 'Union'.");
+
+  /**
+   * No parameters.
+   */
+  static const FfiCode LEAF_CALL_MUST_NOT_RETURN_HANDLE = FfiCode(
+      name: 'LEAF_CALL_MUST_NOT_RETURN_HANDLE',
+      message: "FFI leaf call must not return a Handle.",
+      correction: "Try changing the return type to primitive or struct.");
+
+  /**
+   * No parameters.
+   */
+  static const FfiCode LEAF_CALL_MUST_NOT_TAKE_HANDLE = FfiCode(
+      name: 'LEAF_CALL_MUST_NOT_TAKE_HANDLE',
+      message: "FFI leaf call must not take arguments of type Handle.",
+      correction: "Try changing the argument type to primitive or struct.");
 
   /**
    * No parameters.
@@ -200,9 +244,9 @@ class FfiCode extends AnalyzerErrorCode {
    * No parameters.
    */
   static const FfiCode NON_POSITIVE_ARRAY_DIMENSION = FfiCode(
-    name: 'NON_POSITIVE_INPUT_ON_ARRAY',
-    message: "Array dimensions must be positive numbers.",
-    correction: "Try changing the input to a positive number.");
+      name: 'NON_POSITIVE_INPUT_ON_ARRAY',
+      message: "Array dimensions must be positive numbers.",
+      correction: "Try changing the input to a positive number.");
 
   /**
    * Parameters:

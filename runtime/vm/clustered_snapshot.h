@@ -161,6 +161,8 @@ class DeserializationCluster : public ZoneAllocated {
   bool is_canonical() const { return is_canonical_; }
 
  protected:
+  void ReadAllocFixedSize(Deserializer* deserializer, intptr_t instance_size);
+
   const char* const name_;
   const bool is_canonical_;
   // The range of the ref array that belongs to this cluster.
@@ -182,7 +184,7 @@ class DeserializationRoots {
   // Returns true if these roots are the first snapshot loaded into a heap, and
   // so can assume any canonical objects don't already exist. Returns false if
   // some other snapshot may be loaded before these roots, and so written
-  // canonical objects need to run canoncalization during load.
+  // canonical objects need to run canonicalization during load.
   virtual bool AddBaseObjects(Deserializer* deserializer) = 0;
   virtual void ReadRoots(Deserializer* deserializer) = 0;
   virtual void PostLoad(Deserializer* deserializer, const Array& refs) = 0;
@@ -382,6 +384,11 @@ class Serializer : public ThreadStackResource {
   void WriteFromTo(T obj, P&&... args) {
     auto* from = obj->untag()->from();
     auto* to = obj->untag()->to_snapshot(kind(), args...);
+    WriteRange(obj, from, to);
+  }
+
+  template <typename T>
+  DART_NOINLINE void WriteRange(ObjectPtr obj, T from, T to) {
     for (auto* p = from; p <= to; p++) {
       WriteOffsetRef(
           p->Decompress(obj->heap_base()),
@@ -393,6 +400,11 @@ class Serializer : public ThreadStackResource {
   void PushFromTo(T obj, P&&... args) {
     auto* from = obj->untag()->from();
     auto* to = obj->untag()->to_snapshot(kind(), args...);
+    PushRange(obj, from, to);
+  }
+
+  template <typename T>
+  DART_NOINLINE void PushRange(ObjectPtr obj, T from, T to) {
     for (auto* p = from; p <= to; p++) {
       Push(p->Decompress(obj->heap_base()));
     }
@@ -642,7 +654,7 @@ class Deserializer : public ThreadStackResource {
   ObjectPtr Ref(intptr_t index) const {
     ASSERT(index > 0);
     ASSERT(index <= num_objects_);
-    return refs_->untag()->data()[index];
+    return refs_->untag()->element(index);
   }
 
   ObjectPtr ReadRef() { return Ref(ReadUnsigned()); }

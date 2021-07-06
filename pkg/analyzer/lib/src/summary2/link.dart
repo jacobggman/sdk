@@ -13,6 +13,7 @@ import 'package:analyzer/src/dart/element/inheritance_manager3.dart';
 import 'package:analyzer/src/generated/constant.dart';
 import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer/src/summary2/bundle_writer.dart';
+import 'package:analyzer/src/summary2/detach_nodes.dart';
 import 'package:analyzer/src/summary2/library_builder.dart';
 import 'package:analyzer/src/summary2/linked_element_factory.dart';
 import 'package:analyzer/src/summary2/reference.dart';
@@ -23,8 +24,9 @@ import 'package:analyzer/src/summary2/types_builder.dart';
 import 'package:analyzer/src/summary2/variance_builder.dart';
 
 var timerLinkingLinkingBundle = Stopwatch();
-var timerLinkingRemoveBundle = Stopwatch();
 
+/// Note that AST units and tokens of [inputLibraries] will be damaged.
+///
 /// TODO(scheglov) deprecate `withInformative`.
 LinkResult link(
   LinkedElementFactory elementFactory,
@@ -34,7 +36,6 @@ LinkResult link(
   var linker = Linker(elementFactory);
   linker.link(inputLibraries);
   return LinkResult(
-    astBytes: linker.astBytes,
     resolutionBytes: linker.resolutionBytes,
   );
 }
@@ -49,7 +50,6 @@ class Linker {
 
   late InheritanceManager3 inheritance; // TODO(scheglov) cache it
 
-  late Uint8List astBytes;
   late Uint8List resolutionBytes;
 
   Linker(this.elementFactory);
@@ -67,8 +67,7 @@ class Linker {
   /// If the [element] is part of a library being linked, return the node
   /// from which it was created.
   ast.AstNode? getLinkingNode(Element element) {
-    var node = elementNodes[element];
-    return node ?? (element as ElementImpl).linkedNode;
+    return elementNodes[element];
   }
 
   void link(List<LinkInputLibrary> inputLibraries) {
@@ -81,12 +80,6 @@ class Linker {
     timerLinkingLinkingBundle.start();
     _writeLibraries();
     timerLinkingLinkingBundle.stop();
-
-    timerLinkingRemoveBundle.start();
-    elementFactory.removeBundle(
-      inputLibraries.map((e) => e.uriStr).toSet(),
-    );
-    timerLinkingRemoveBundle.stop();
   }
 
   void _buildEnumChildren() {
@@ -106,6 +99,7 @@ class Linker {
     _resolveDefaultValues();
     _resolveMetadata();
     _collectMixinSuperInvokedNames();
+    _detachNodes();
   }
 
   void _collectMixinSuperInvokedNames() {
@@ -116,11 +110,6 @@ class Linker {
 
   void _computeLibraryScopes() {
     for (var library in builders.values) {
-      library.buildElement();
-    }
-
-    for (var library in builders.values) {
-      library.addLocalDeclarations();
       library.buildElements();
     }
 
@@ -171,10 +160,6 @@ class Linker {
     for (var library in builders.values) {
       library.storeExportScope();
     }
-
-    for (var library in builders.values) {
-      library.buildScope();
-    }
   }
 
   void _createTypeSystem() {
@@ -183,6 +168,12 @@ class Linker {
     elementFactory.createTypeProviders(coreLib, asyncLib);
 
     inheritance = InheritanceManager3();
+  }
+
+  void _detachNodes() {
+    for (var builder in builders.values) {
+      detachElementsFromNodes(builder.element);
+    }
   }
 
   void _performTopLevelInference() {
@@ -216,8 +207,8 @@ class Linker {
     for (var library in builders.values) {
       library.resolveTypes(nodesToBuildType);
     }
-    VarianceBuilder().perform(this);
-    computeSimplyBounded(builders.values);
+    VarianceBuilder(this).perform();
+    computeSimplyBounded(this);
     TypeAliasSelfReferenceFinder().perform(this);
     TypesBuilder(this).build(nodesToBuildType);
   }
@@ -235,7 +226,6 @@ class Linker {
     }
 
     var writeWriterResult = bundleWriter.finish();
-    astBytes = writeWriterResult.astBytes;
     resolutionBytes = writeWriterResult.resolutionBytes;
   }
 }
@@ -244,7 +234,10 @@ class LinkInputLibrary {
   final Source source;
   final List<LinkInputUnit> units;
 
-  LinkInputLibrary(this.source, this.units);
+  LinkInputLibrary({
+    required this.source,
+    required this.units,
+  });
 
   Uri get uri => source.uri;
 
@@ -252,29 +245,33 @@ class LinkInputLibrary {
 }
 
 class LinkInputUnit {
+  final int? partDirectiveIndex;
   final String? partUriStr;
   final Source source;
+  final String? sourceContent;
   final bool isSynthetic;
   final ast.CompilationUnit unit;
 
-  LinkInputUnit(
+  LinkInputUnit({
+    required this.partDirectiveIndex,
     this.partUriStr,
-    this.source,
-    this.isSynthetic,
-    this.unit,
-  );
+    required this.source,
+    this.sourceContent,
+    required this.isSynthetic,
+    required this.unit,
+  });
 
-  String get uriStr {
-    return '${source.uri}';
-  }
+  Uri get uri => source.uri;
+
+  String get uriStr => '$uri';
 }
 
 class LinkResult {
-  final Uint8List astBytes;
+  @Deprecated('This field is not used anymore')
+  final Uint8List astBytes = Uint8List(0);
   final Uint8List resolutionBytes;
 
   LinkResult({
-    required this.astBytes,
     required this.resolutionBytes,
   });
 }

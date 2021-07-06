@@ -21,7 +21,7 @@ ConstantReader::ConstantReader(KernelReaderHelper* helper,
       translation_helper_(helper->translation_helper_),
       active_class_(active_class),
       script_(helper->script()),
-      result_(Instance::Handle(zone_)) {}
+      result_(Object::Handle(zone_)) {}
 
 InstancePtr ConstantReader::ReadConstantInitializer() {
   Tag tag = helper_->ReadTag();  // read tag.
@@ -33,7 +33,7 @@ InstancePtr ConstantReader::ReadConstantInitializer() {
                     "Not a constant expression: unexpected kernel tag %s (%d)",
                     Reader::TagName(tag), tag);
   }
-  return result_.ptr();
+  return Instance::RawCast(result_.ptr());
 }
 
 InstancePtr ConstantReader::ReadConstantExpression() {
@@ -58,7 +58,7 @@ InstancePtr ConstantReader::ReadConstantExpression() {
                     "Not a constant expression: unexpected kernel tag %s (%d)",
                     Reader::TagName(tag), tag);
   }
-  return result_.ptr();
+  return Instance::RawCast(result_.ptr());
 }
 
 ObjectPtr ConstantReader::ReadAnnotations() {
@@ -87,23 +87,22 @@ InstancePtr ConstantReader::ReadConstant(intptr_t constant_index) {
   {
     SafepointMutexLocker ml(
         H.thread()->isolate_group()->kernel_constants_mutex());
-    KernelConstantsMap constant_map(H.info().constants());
-    result_ ^= constant_map.GetOrNull(constant_index);
-    ASSERT(constant_map.Release().ptr() == H.info().constants());
+    const auto& constants_array = Array::Handle(Z, H.info().constants());
+    ASSERT(constant_index < constants_array.Length());
+    result_ = constants_array.At(constant_index);
   }
 
   // On miss, evaluate, and insert value.
-  if (result_.IsNull()) {
+  if (result_.ptr() == Object::sentinel().ptr()) {
     LeaveCompilerScope cs(H.thread());
     result_ = ReadConstantInternal(constant_index);
     SafepointMutexLocker ml(
         H.thread()->isolate_group()->kernel_constants_mutex());
-    KernelConstantsMap constant_map(H.info().constants());
-    auto insert = constant_map.InsertNewOrGetValue(constant_index, result_);
-    ASSERT(insert == result_.ptr());
-    H.info().set_constants(constant_map.Release());  // update!
+    const auto& constants_array = Array::Handle(Z, H.info().constants());
+    ASSERT(constant_index < constants_array.Length());
+    constants_array.SetAt(constant_index, result_);
   }
-  return result_.ptr();
+  return Instance::RawCast(result_.ptr());
 }
 
 bool ConstantReader::IsInstanceConstant(intptr_t constant_index,
@@ -120,12 +119,22 @@ bool ConstantReader::IsInstanceConstant(intptr_t constant_index,
   return false;
 }
 
-intptr_t ConstantReader::NavigateToIndex(KernelReaderHelper* reader,
-                                         intptr_t constant_index) {
+intptr_t ConstantReader::NumConstants() {
+  ASSERT(!H.constants_table().IsNull());
+  KernelReaderHelper reader(Z, &H, script_, H.constants_table(), 0);
+  return NumConstants(&reader);
+}
+
+intptr_t ConstantReader::NumConstants(KernelReaderHelper* reader) {
   // Get reader directly into raw bytes of constant table/constant mapping.
   // Get the length of the constants (at the end of the mapping).
   reader->SetOffset(reader->ReaderSize() - 4);
-  const intptr_t num_constants = reader->ReadUInt32();
+  return reader->ReadUInt32();
+}
+
+intptr_t ConstantReader::NavigateToIndex(KernelReaderHelper* reader,
+                                         intptr_t constant_index) {
+  const intptr_t num_constants = NumConstants(reader);
 
   // Get the binary offset of the constant at the wanted index.
   reader->SetOffset(reader->ReaderSize() - 4 - (num_constants * 4) +
@@ -301,7 +310,7 @@ InstancePtr ConstantReader::ReadConstantInternal(intptr_t constant_index) {
       }
       break;
     }
-    case kPartialInstantiationConstant: {
+    case kInstantiationConstant: {
       // Recurse into lazily evaluating the "sub" constant
       // needed to evaluate the current constant.
       const intptr_t entry_index = reader.ReadUInt();
@@ -336,7 +345,7 @@ InstancePtr ConstantReader::ReadConstantInternal(intptr_t constant_index) {
                               type_arguments, function, context, Heap::kOld);
       break;
     }
-    case kTearOffConstant: {
+    case kStaticTearOffConstant: {
       const NameIndex index = reader.ReadCanonicalNameReference();
       Function& function =
           Function::Handle(Z, H.LookupStaticMethodByKernelProcedure(index));

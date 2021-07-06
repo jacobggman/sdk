@@ -26,7 +26,7 @@ export 'snapshot_graph.dart'
         HeapSnapshotObjectNoData,
         HeapSnapshotObjectNullData;
 
-const String vmServiceVersion = '3.45.0';
+const String vmServiceVersion = '3.48.0';
 
 /// @optional
 const String optional = 'optional';
@@ -1150,6 +1150,7 @@ abstract class VmServiceInterface {
   /// Debug | PauseStart, PauseExit, PauseBreakpoint, PauseInterrupted,
   /// PauseException, PausePostRequest, Resume, BreakpointAdded,
   /// BreakpointResolved, BreakpointRemoved, BreakpointUpdated, Inspect, None
+  /// Profiler | UserTagChanged
   /// GC | GC
   /// Extension | Extension
   /// Timeline | TimelineEvents, TimelineStreamsSubscriptionUpdate
@@ -1689,6 +1690,9 @@ class VmService implements VmServiceInterface {
 
   // PauseStart, PauseExit, PauseBreakpoint, PauseInterrupted, PauseException, PausePostRequest, Resume, BreakpointAdded, BreakpointResolved, BreakpointRemoved, BreakpointUpdated, Inspect, None
   Stream<Event> get onDebugEvent => _getEventController('Debug').stream;
+
+  // UserTagChanged
+  Stream<Event> get onProfilerEvent => _getEventController('Profiler').stream;
 
   // GC
   Stream<Event> get onGCEvent => _getEventController('GC').stream;
@@ -2384,6 +2388,7 @@ class EventStreams {
   static const String kVM = 'VM';
   static const String kIsolate = 'Isolate';
   static const String kDebug = 'Debug';
+  static const String kProfiler = 'Profiler';
   static const String kGC = 'GC';
   static const String kExtension = 'Extension';
   static const String kTimeline = 'Timeline';
@@ -2496,6 +2501,9 @@ class EventKind {
   /// Notification that a Service has been removed from the Service Protocol
   /// from another client.
   static const String kServiceUnregistered = 'ServiceUnregistered';
+
+  /// Notification that the UserTag for an isolate has been changed.
+  static const String kUserTagChanged = 'UserTagChanged';
 }
 
 /// Adding new values to `InstanceKind` is considered a backwards compatible
@@ -2690,8 +2698,8 @@ class AllocationProfile extends Response {
                 as List? ??
             []);
     memoryUsage =
-        createServiceObject(json['memoryUsage']!, const ['MemoryUsage'])
-            as MemoryUsage;
+        createServiceObject(json['memoryUsage'], const ['MemoryUsage'])
+            as MemoryUsage?;
     dateLastAccumulatorReset = json['dateLastAccumulatorReset'] is String
         ? int.parse(json['dateLastAccumulatorReset'])
         : json['dateLastAccumulatorReset'];
@@ -2743,9 +2751,9 @@ class BoundField {
   });
 
   BoundField._fromJson(Map<String, dynamic> json) {
-    decl = createServiceObject(json['decl']!, const ['FieldRef']) as FieldRef;
+    decl = createServiceObject(json['decl'], const ['FieldRef']) as FieldRef?;
     value =
-        createServiceObject(json['value']!, const ['InstanceRef', 'Sentinel'])
+        createServiceObject(json['value'], const ['InstanceRef', 'Sentinel'])
             as dynamic;
   }
 
@@ -2800,7 +2808,7 @@ class BoundVariable extends Response {
 
   BoundVariable._fromJson(Map<String, dynamic> json) : super._fromJson(json) {
     name = json['name'] ?? '';
-    value = createServiceObject(json['value']!,
+    value = createServiceObject(json['value'],
         const ['InstanceRef', 'TypeArgumentsRef', 'Sentinel']) as dynamic;
     declarationTokenPos = json['declarationTokenPos'] ?? -1;
     scopeStartTokenPos = json['scopeStartTokenPos'] ?? -1;
@@ -2875,7 +2883,7 @@ class Breakpoint extends Obj {
     enabled = json['enabled'] ?? false;
     resolved = json['resolved'] ?? false;
     isSyntheticAsyncContinuation = json['isSyntheticAsyncContinuation'];
-    location = createServiceObject(json['location']!,
+    location = createServiceObject(json['location'],
         const ['SourceLocation', 'UnresolvedSourceLocation']) as dynamic;
   }
 
@@ -2899,7 +2907,7 @@ class Breakpoint extends Obj {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is Breakpoint && id == other.id;
+  bool operator ==(Object other) => other is Breakpoint && id == other.id;
 
   String toString() => '[Breakpoint ' //
       'id: ${id}, breakpointNumber: ${breakpointNumber}, enabled: ${enabled}, ' //
@@ -2914,15 +2922,28 @@ class ClassRef extends ObjRef {
   /// The name of this class.
   String? name;
 
+  /// The location of this class in the source code.
+  @optional
+  SourceLocation? location;
+
+  /// The library which contains this class.
+  LibraryRef? library;
+
   ClassRef({
     required this.name,
+    required this.library,
     required String id,
+    this.location,
   }) : super(
           id: id,
         );
 
   ClassRef._fromJson(Map<String, dynamic> json) : super._fromJson(json) {
     name = json['name'] ?? '';
+    location = createServiceObject(json['location'], const ['SourceLocation'])
+        as SourceLocation?;
+    library = createServiceObject(json['library'], const ['LibraryRef'])
+        as LibraryRef?;
   }
 
   @override
@@ -2934,15 +2955,18 @@ class ClassRef extends ObjRef {
     json['type'] = type;
     json.addAll({
       'name': name,
+      'library': library?.toJson(),
     });
+    _setIfNotNull(json, 'location', location?.toJson());
     return json;
   }
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is ClassRef && id == other.id;
+  bool operator ==(Object other) => other is ClassRef && id == other.id;
 
-  String toString() => '[ClassRef id: ${id}, name: ${name}]';
+  String toString() =>
+      '[ClassRef id: ${id}, name: ${name}, library: ${library}]';
 }
 
 /// A `Class` provides information about a Dart language class.
@@ -2952,6 +2976,13 @@ class Class extends Obj implements ClassRef {
 
   /// The name of this class.
   String? name;
+
+  /// The location of this class in the source code.
+  @optional
+  SourceLocation? location;
+
+  /// The library which contains this class.
+  LibraryRef? library;
 
   /// The error which occurred during class finalization, if it exists.
   @optional
@@ -2965,13 +2996,6 @@ class Class extends Obj implements ClassRef {
 
   /// Are allocations of this class being traced?
   bool? traceAllocations;
-
-  /// The library which contains this class.
-  LibraryRef? library;
-
-  /// The location of this class in the source code.
-  @optional
-  SourceLocation? location;
 
   /// The superclass of this class, if any.
   @optional
@@ -3006,17 +3030,17 @@ class Class extends Obj implements ClassRef {
 
   Class({
     required this.name,
+    required this.library,
     required this.isAbstract,
     required this.isConst,
     required this.traceAllocations,
-    required this.library,
     required this.interfaces,
     required this.fields,
     required this.functions,
     required this.subclasses,
     required String id,
-    this.error,
     this.location,
+    this.error,
     this.superClass,
     this.superType,
     this.mixin,
@@ -3026,14 +3050,14 @@ class Class extends Obj implements ClassRef {
 
   Class._fromJson(Map<String, dynamic> json) : super._fromJson(json) {
     name = json['name'] ?? '';
+    location = createServiceObject(json['location'], const ['SourceLocation'])
+        as SourceLocation?;
+    library = createServiceObject(json['library'], const ['LibraryRef'])
+        as LibraryRef?;
     error = createServiceObject(json['error'], const ['ErrorRef']) as ErrorRef?;
     isAbstract = json['abstract'] ?? false;
     isConst = json['const'] ?? false;
     traceAllocations = json['traceAllocations'] ?? false;
-    library = createServiceObject(json['library']!, const ['LibraryRef'])
-        as LibraryRef;
-    location = createServiceObject(json['location'], const ['SourceLocation'])
-        as SourceLocation?;
     superClass =
         createServiceObject(json['super'], const ['ClassRef']) as ClassRef?;
     superType = createServiceObject(json['superType'], const ['InstanceRef'])
@@ -3063,17 +3087,17 @@ class Class extends Obj implements ClassRef {
     json['type'] = type;
     json.addAll({
       'name': name,
+      'library': library?.toJson(),
       'abstract': isAbstract,
       'const': isConst,
       'traceAllocations': traceAllocations,
-      'library': library?.toJson(),
       'interfaces': interfaces?.map((f) => f.toJson()).toList(),
       'fields': fields?.map((f) => f.toJson()).toList(),
       'functions': functions?.map((f) => f.toJson()).toList(),
       'subclasses': subclasses?.map((f) => f.toJson()).toList(),
     });
-    _setIfNotNull(json, 'error', error?.toJson());
     _setIfNotNull(json, 'location', location?.toJson());
+    _setIfNotNull(json, 'error', error?.toJson());
     _setIfNotNull(json, 'super', superClass?.toJson());
     _setIfNotNull(json, 'superType', superType?.toJson());
     _setIfNotNull(json, 'mixin', mixin?.toJson());
@@ -3082,7 +3106,7 @@ class Class extends Obj implements ClassRef {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is Class && id == other.id;
+  bool operator ==(Object other) => other is Class && id == other.id;
 
   String toString() => '[Class]';
 }
@@ -3118,7 +3142,7 @@ class ClassHeapStats extends Response {
 
   ClassHeapStats._fromJson(Map<String, dynamic> json) : super._fromJson(json) {
     classRef =
-        createServiceObject(json['class']!, const ['ClassRef']) as ClassRef;
+        createServiceObject(json['class'], const ['ClassRef']) as ClassRef?;
     accumulatedSize = json['accumulatedSize'] ?? -1;
     bytesCurrent = json['bytesCurrent'] ?? -1;
     instancesAccumulated = json['instancesAccumulated'] ?? -1;
@@ -3219,7 +3243,7 @@ class CodeRef extends ObjRef {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is CodeRef && id == other.id;
+  bool operator ==(Object other) => other is CodeRef && id == other.id;
 
   String toString() => '[CodeRef id: ${id}, name: ${name}, kind: ${kind}]';
 }
@@ -3264,7 +3288,7 @@ class Code extends ObjRef implements CodeRef {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is Code && id == other.id;
+  bool operator ==(Object other) => other is Code && id == other.id;
 
   String toString() => '[Code id: ${id}, name: ${name}, kind: ${kind}]';
 }
@@ -3302,7 +3326,7 @@ class ContextRef extends ObjRef {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is ContextRef && id == other.id;
+  bool operator ==(Object other) => other is ContextRef && id == other.id;
 
   String toString() => '[ContextRef id: ${id}, length: ${length}]';
 }
@@ -3359,7 +3383,7 @@ class Context extends Obj implements ContextRef {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is Context && id == other.id;
+  bool operator ==(Object other) => other is Context && id == other.id;
 
   String toString() =>
       '[Context id: ${id}, length: ${length}, variables: ${variables}]';
@@ -3378,7 +3402,7 @@ class ContextElement {
 
   ContextElement._fromJson(Map<String, dynamic> json) {
     value =
-        createServiceObject(json['value']!, const ['InstanceRef', 'Sentinel'])
+        createServiceObject(json['value'], const ['InstanceRef', 'Sentinel'])
             as dynamic;
   }
 
@@ -3615,7 +3639,7 @@ class ErrorRef extends ObjRef {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is ErrorRef && id == other.id;
+  bool operator ==(Object other) => other is ErrorRef && id == other.id;
 
   String toString() =>
       '[ErrorRef id: ${id}, kind: ${kind}, message: ${message}]';
@@ -3680,7 +3704,7 @@ class Error extends Obj implements ErrorRef {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is Error && id == other.id;
+  bool operator ==(Object other) => other is Error && id == other.id;
 
   String toString() => '[Error id: ${id}, kind: ${kind}, message: ${message}]';
 }
@@ -3869,6 +3893,14 @@ class Event extends Response {
   @optional
   bool? last;
 
+  /// The current UserTag label.
+  @optional
+  String? updatedTag;
+
+  /// The previous UserTag label.
+  @optional
+  String? previousTag;
+
   /// Binary data associated with the event.
   ///
   /// This is provided for the event kinds:
@@ -3901,6 +3933,8 @@ class Event extends Response {
     this.flag,
     this.newValue,
     this.last,
+    this.updatedTag,
+    this.previousTag,
     this.data,
   });
 
@@ -3943,6 +3977,8 @@ class Event extends Response {
     flag = json['flag'];
     newValue = json['newValue'];
     last = json['last'];
+    updatedTag = json['updatedTag'];
+    previousTag = json['previousTag'];
     data = json['data'];
   }
 
@@ -3982,6 +4018,8 @@ class Event extends Response {
     _setIfNotNull(json, 'flag', flag);
     _setIfNotNull(json, 'newValue', newValue);
     _setIfNotNull(json, 'last', last);
+    _setIfNotNull(json, 'updatedTag', updatedTag);
+    _setIfNotNull(json, 'previousTag', previousTag);
     _setIfNotNull(json, 'data', data);
     return json;
   }
@@ -4015,6 +4053,10 @@ class FieldRef extends ObjRef {
   /// Is this field static?
   bool? isStatic;
 
+  /// The location of this field in the source code.
+  @optional
+  SourceLocation? location;
+
   FieldRef({
     required this.name,
     required this.owner,
@@ -4023,19 +4065,22 @@ class FieldRef extends ObjRef {
     required this.isFinal,
     required this.isStatic,
     required String id,
+    this.location,
   }) : super(
           id: id,
         );
 
   FieldRef._fromJson(Map<String, dynamic> json) : super._fromJson(json) {
     name = json['name'] ?? '';
-    owner = createServiceObject(json['owner']!, const ['ObjRef']) as ObjRef;
+    owner = createServiceObject(json['owner'], const ['ObjRef']) as ObjRef?;
     declaredType =
-        createServiceObject(json['declaredType']!, const ['InstanceRef'])
-            as InstanceRef;
+        createServiceObject(json['declaredType'], const ['InstanceRef'])
+            as InstanceRef?;
     isConst = json['const'] ?? false;
     isFinal = json['final'] ?? false;
     isStatic = json['static'] ?? false;
+    location = createServiceObject(json['location'], const ['SourceLocation'])
+        as SourceLocation?;
   }
 
   @override
@@ -4053,12 +4098,13 @@ class FieldRef extends ObjRef {
       'final': isFinal,
       'static': isStatic,
     });
+    _setIfNotNull(json, 'location', location?.toJson());
     return json;
   }
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is FieldRef && id == other.id;
+  bool operator ==(Object other) => other is FieldRef && id == other.id;
 
   String toString() => '[FieldRef ' //
       'id: ${id}, name: ${name}, owner: ${owner}, declaredType: ${declaredType}, ' //
@@ -4091,16 +4137,16 @@ class Field extends Obj implements FieldRef {
   /// Is this field static?
   bool? isStatic;
 
+  /// The location of this field in the source code.
+  @optional
+  SourceLocation? location;
+
   /// The value of this field, if the field is static. If uninitialized, this
   /// will take the value of an uninitialized Sentinel.
   ///
   /// [staticValue] can be one of [InstanceRef] or [Sentinel].
   @optional
   dynamic staticValue;
-
-  /// The location of this field in the source code.
-  @optional
-  SourceLocation? location;
 
   Field({
     required this.name,
@@ -4110,25 +4156,25 @@ class Field extends Obj implements FieldRef {
     required this.isFinal,
     required this.isStatic,
     required String id,
-    this.staticValue,
     this.location,
+    this.staticValue,
   }) : super(
           id: id,
         );
 
   Field._fromJson(Map<String, dynamic> json) : super._fromJson(json) {
     name = json['name'] ?? '';
-    owner = createServiceObject(json['owner']!, const ['ObjRef']) as ObjRef;
+    owner = createServiceObject(json['owner'], const ['ObjRef']) as ObjRef?;
     declaredType =
-        createServiceObject(json['declaredType']!, const ['InstanceRef'])
-            as InstanceRef;
+        createServiceObject(json['declaredType'], const ['InstanceRef'])
+            as InstanceRef?;
     isConst = json['const'] ?? false;
     isFinal = json['final'] ?? false;
     isStatic = json['static'] ?? false;
-    staticValue = createServiceObject(
-        json['staticValue'], const ['InstanceRef', 'Sentinel']) as dynamic;
     location = createServiceObject(json['location'], const ['SourceLocation'])
         as SourceLocation?;
+    staticValue = createServiceObject(
+        json['staticValue'], const ['InstanceRef', 'Sentinel']) as dynamic;
   }
 
   @override
@@ -4146,14 +4192,14 @@ class Field extends Obj implements FieldRef {
       'final': isFinal,
       'static': isStatic,
     });
-    _setIfNotNull(json, 'staticValue', staticValue?.toJson());
     _setIfNotNull(json, 'location', location?.toJson());
+    _setIfNotNull(json, 'staticValue', staticValue?.toJson());
     return json;
   }
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is Field && id == other.id;
+  bool operator ==(Object other) => other is Field && id == other.id;
 
   String toString() => '[Field ' //
       'id: ${id}, name: ${name}, owner: ${owner}, declaredType: ${declaredType}, ' //
@@ -4328,12 +4374,17 @@ class FuncRef extends ObjRef {
   /// Is this function const?
   bool? isConst;
 
+  /// The location of this function in the source code.
+  @optional
+  SourceLocation? location;
+
   FuncRef({
     required this.name,
     required this.owner,
     required this.isStatic,
     required this.isConst,
     required String id,
+    this.location,
   }) : super(
           id: id,
         );
@@ -4341,9 +4392,11 @@ class FuncRef extends ObjRef {
   FuncRef._fromJson(Map<String, dynamic> json) : super._fromJson(json) {
     name = json['name'] ?? '';
     owner = createServiceObject(
-        json['owner']!, const ['LibraryRef', 'ClassRef', 'FuncRef']) as dynamic;
+        json['owner'], const ['LibraryRef', 'ClassRef', 'FuncRef']) as dynamic;
     isStatic = json['static'] ?? false;
     isConst = json['const'] ?? false;
+    location = createServiceObject(json['location'], const ['SourceLocation'])
+        as SourceLocation?;
   }
 
   @override
@@ -4359,12 +4412,13 @@ class FuncRef extends ObjRef {
       'static': isStatic,
       'const': isConst,
     });
+    _setIfNotNull(json, 'location', location?.toJson());
     return json;
   }
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is FuncRef && id == other.id;
+  bool operator ==(Object other) => other is FuncRef && id == other.id;
 
   String toString() => '[FuncRef ' //
       'id: ${id}, name: ${name}, owner: ${owner}, isStatic: ${isStatic}, ' //
@@ -4413,7 +4467,7 @@ class Func extends Obj implements FuncRef {
   Func._fromJson(Map<String, dynamic> json) : super._fromJson(json) {
     name = json['name'] ?? '';
     owner = createServiceObject(
-        json['owner']!, const ['LibraryRef', 'ClassRef', 'FuncRef']) as dynamic;
+        json['owner'], const ['LibraryRef', 'ClassRef', 'FuncRef']) as dynamic;
     isStatic = json['static'] ?? false;
     isConst = json['const'] ?? false;
     location = createServiceObject(json['location'], const ['SourceLocation'])
@@ -4441,7 +4495,7 @@ class Func extends Obj implements FuncRef {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is Func && id == other.id;
+  bool operator ==(Object other) => other is Func && id == other.id;
 
   String toString() => '[Func ' //
       'id: ${id}, name: ${name}, owner: ${owner}, isStatic: ${isStatic}, ' //
@@ -4600,7 +4654,7 @@ class InstanceRef extends ObjRef {
     kind = json['kind'] ?? '';
     identityHashCode = json['identityHashCode'] ?? -1;
     classRef =
-        createServiceObject(json['class']!, const ['ClassRef']) as ClassRef;
+        createServiceObject(json['class'], const ['ClassRef']) as ClassRef?;
     valueAsString = json['valueAsString'];
     valueAsStringIsTruncated = json['valueAsStringIsTruncated'];
     length = json['length'];
@@ -4654,7 +4708,7 @@ class InstanceRef extends ObjRef {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is InstanceRef && id == other.id;
+  bool operator ==(Object other) => other is InstanceRef && id == other.id;
 
   String toString() => '[InstanceRef ' //
       'id: ${id}, kind: ${kind}, identityHashCode: ${identityHashCode}, ' //
@@ -4984,7 +5038,7 @@ class Instance extends Obj implements InstanceRef {
     kind = json['kind'] ?? '';
     identityHashCode = json['identityHashCode'] ?? -1;
     classRef =
-        createServiceObject(json['class']!, const ['ClassRef']) as ClassRef;
+        createServiceObject(json['class'], const ['ClassRef']) as ClassRef?;
     valueAsString = json['valueAsString'];
     valueAsStringIsTruncated = json['valueAsStringIsTruncated'];
     length = json['length'];
@@ -5088,7 +5142,7 @@ class Instance extends Obj implements InstanceRef {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is Instance && id == other.id;
+  bool operator ==(Object other) => other is Instance && id == other.id;
 
   String toString() => '[Instance ' //
       'id: ${id}, kind: ${kind}, identityHashCode: ${identityHashCode}, ' //
@@ -5145,7 +5199,7 @@ class IsolateRef extends Response {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is IsolateRef && id == other.id;
+  bool operator ==(Object other) => other is IsolateRef && id == other.id;
 
   String toString() => '[IsolateRef ' //
       'id: ${id}, number: ${number}, name: ${name}, isSystemIsolate: ${isSystemIsolate}]';
@@ -5250,7 +5304,7 @@ class Isolate extends Response implements IsolateRef {
     livePorts = json['livePorts'] ?? -1;
     pauseOnExit = json['pauseOnExit'] ?? false;
     pauseEvent =
-        createServiceObject(json['pauseEvent']!, const ['Event']) as Event;
+        createServiceObject(json['pauseEvent'], const ['Event']) as Event?;
     rootLib = createServiceObject(json['rootLib'], const ['LibraryRef'])
         as LibraryRef?;
     libraries = List<LibraryRef>.from(
@@ -5297,7 +5351,7 @@ class Isolate extends Response implements IsolateRef {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is Isolate && id == other.id;
+  bool operator ==(Object other) => other is Isolate && id == other.id;
 
   String toString() => '[Isolate]';
 }
@@ -5387,7 +5441,7 @@ class IsolateGroupRef extends Response {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is IsolateGroupRef && id == other.id;
+  bool operator ==(Object other) => other is IsolateGroupRef && id == other.id;
 
   String toString() => '[IsolateGroupRef ' //
       'id: ${id}, number: ${number}, name: ${name}, isSystemIsolateGroup: ${isSystemIsolateGroup}]';
@@ -5451,7 +5505,7 @@ class IsolateGroup extends Response implements IsolateGroupRef {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is IsolateGroup && id == other.id;
+  bool operator ==(Object other) => other is IsolateGroup && id == other.id;
 
   String toString() => '[IsolateGroup ' //
       'id: ${id}, number: ${number}, name: ${name}, isSystemIsolateGroup: ${isSystemIsolateGroup}, ' //
@@ -5519,7 +5573,7 @@ class InboundReference {
   });
 
   InboundReference._fromJson(Map<String, dynamic> json) {
-    source = createServiceObject(json['source']!, const ['ObjRef']) as ObjRef;
+    source = createServiceObject(json['source'], const ['ObjRef']) as ObjRef?;
     parentListIndex = json['parentListIndex'];
     parentField = createServiceObject(json['parentField'], const ['FieldRef'])
         as FieldRef?;
@@ -5619,7 +5673,7 @@ class LibraryRef extends ObjRef {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is LibraryRef && id == other.id;
+  bool operator ==(Object other) => other is LibraryRef && id == other.id;
 
   String toString() => '[LibraryRef id: ${id}, name: ${name}, uri: ${uri}]';
 }
@@ -5711,7 +5765,7 @@ class Library extends Obj implements LibraryRef {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is Library && id == other.id;
+  bool operator ==(Object other) => other is Library && id == other.id;
 
   String toString() => '[Library]';
 }
@@ -5733,19 +5787,31 @@ class LibraryDependency {
   /// The library being imported or exported.
   LibraryRef? target;
 
+  /// The list of symbols made visible from this dependency.
+  @optional
+  List<String>? shows;
+
+  /// The list of symbols hidden from this dependency.
+  @optional
+  List<String>? hides;
+
   LibraryDependency({
     required this.isImport,
     required this.isDeferred,
     required this.prefix,
     required this.target,
+    this.shows,
+    this.hides,
   });
 
   LibraryDependency._fromJson(Map<String, dynamic> json) {
     isImport = json['isImport'] ?? false;
     isDeferred = json['isDeferred'] ?? false;
     prefix = json['prefix'] ?? '';
-    target = createServiceObject(json['target']!, const ['LibraryRef'])
-        as LibraryRef;
+    target = createServiceObject(json['target'], const ['LibraryRef'])
+        as LibraryRef?;
+    shows = json['shows'] == null ? null : List<String>.from(json['shows']);
+    hides = json['hides'] == null ? null : List<String>.from(json['hides']);
   }
 
   Map<String, dynamic> toJson() {
@@ -5756,6 +5822,8 @@ class LibraryDependency {
       'prefix': prefix,
       'target': target?.toJson(),
     });
+    _setIfNotNull(json, 'shows', shows?.map((f) => f).toList());
+    _setIfNotNull(json, 'hides', hides?.map((f) => f).toList());
     return json;
   }
 
@@ -5807,19 +5875,19 @@ class LogRecord extends Response {
   });
 
   LogRecord._fromJson(Map<String, dynamic> json) : super._fromJson(json) {
-    message = createServiceObject(json['message']!, const ['InstanceRef'])
-        as InstanceRef;
+    message = createServiceObject(json['message'], const ['InstanceRef'])
+        as InstanceRef?;
     time = json['time'] ?? -1;
     level = json['level'] ?? -1;
     sequenceNumber = json['sequenceNumber'] ?? -1;
-    loggerName = createServiceObject(json['loggerName']!, const ['InstanceRef'])
-        as InstanceRef;
-    zone = createServiceObject(json['zone']!, const ['InstanceRef'])
-        as InstanceRef;
-    error = createServiceObject(json['error']!, const ['InstanceRef'])
-        as InstanceRef;
-    stackTrace = createServiceObject(json['stackTrace']!, const ['InstanceRef'])
-        as InstanceRef;
+    loggerName = createServiceObject(json['loggerName'], const ['InstanceRef'])
+        as InstanceRef?;
+    zone = createServiceObject(json['zone'], const ['InstanceRef'])
+        as InstanceRef?;
+    error = createServiceObject(json['error'], const ['InstanceRef'])
+        as InstanceRef?;
+    stackTrace = createServiceObject(json['stackTrace'], const ['InstanceRef'])
+        as InstanceRef?;
   }
 
   @override
@@ -5861,10 +5929,10 @@ class MapAssociation {
   });
 
   MapAssociation._fromJson(Map<String, dynamic> json) {
-    key = createServiceObject(json['key']!, const ['InstanceRef', 'Sentinel'])
+    key = createServiceObject(json['key'], const ['InstanceRef', 'Sentinel'])
         as dynamic;
     value =
-        createServiceObject(json['value']!, const ['InstanceRef', 'Sentinel'])
+        createServiceObject(json['value'], const ['InstanceRef', 'Sentinel'])
             as dynamic;
   }
 
@@ -6051,6 +6119,11 @@ class NullValRef extends InstanceRef {
           kind: InstanceKind.kNull,
           classRef: ClassRef(
             id: 'class/null',
+            library: LibraryRef(
+              id: '',
+              name: 'dart:core',
+              uri: 'dart:core',
+            ),
             name: 'Null',
           ),
         );
@@ -6074,7 +6147,7 @@ class NullValRef extends InstanceRef {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is NullValRef && id == other.id;
+  bool operator ==(Object other) => other is NullValRef && id == other.id;
 
   String toString() => '[NullValRef ' //
       'id: ${id}, kind: ${kind}, identityHashCode: ${identityHashCode}, ' //
@@ -6098,6 +6171,11 @@ class NullVal extends Instance implements NullValRef {
           kind: InstanceKind.kNull,
           classRef: ClassRef(
             id: 'class/null',
+            library: LibraryRef(
+              id: '',
+              name: 'dart:core',
+              uri: 'dart:core',
+            ),
             name: 'Null',
           ),
         );
@@ -6121,7 +6199,7 @@ class NullVal extends Instance implements NullValRef {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is NullVal && id == other.id;
+  bool operator ==(Object other) => other is NullVal && id == other.id;
 
   String toString() => '[NullVal ' //
       'id: ${id}, kind: ${kind}, identityHashCode: ${identityHashCode}, ' //
@@ -6169,7 +6247,7 @@ class ObjRef extends Response {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is ObjRef && id == other.id;
+  bool operator ==(Object other) => other is ObjRef && id == other.id;
 
   String toString() => '[ObjRef id: ${id}]';
 }
@@ -6245,7 +6323,7 @@ class Obj extends Response implements ObjRef {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is Obj && id == other.id;
+  bool operator ==(Object other) => other is Obj && id == other.id;
 
   String toString() => '[Obj id: ${id}]';
 }
@@ -6323,7 +6401,7 @@ class ProfileFunction {
     exclusiveTicks = json['exclusiveTicks'] ?? -1;
     resolvedUrl = json['resolvedUrl'] ?? '';
     function =
-        createServiceObject(json['function']!, const ['dynamic']) as dynamic;
+        createServiceObject(json['function'], const ['dynamic']) as dynamic;
   }
 
   Map<String, dynamic> toJson() {
@@ -6433,8 +6511,8 @@ class ProcessMemoryUsage extends Response {
 
   ProcessMemoryUsage._fromJson(Map<String, dynamic> json)
       : super._fromJson(json) {
-    root = createServiceObject(json['root']!, const ['ProcessMemoryItem'])
-        as ProcessMemoryItem;
+    root = createServiceObject(json['root'], const ['ProcessMemoryItem'])
+        as ProcessMemoryItem?;
   }
 
   @override
@@ -6562,7 +6640,7 @@ class RetainingObject {
   });
 
   RetainingObject._fromJson(Map<String, dynamic> json) {
-    value = createServiceObject(json['value']!, const ['ObjRef']) as ObjRef;
+    value = createServiceObject(json['value'], const ['ObjRef']) as ObjRef?;
     parentListIndex = json['parentListIndex'];
     parentMapKey =
         createServiceObject(json['parentMapKey'], const ['ObjRef']) as ObjRef?;
@@ -6736,7 +6814,7 @@ class ScriptRef extends ObjRef {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is ScriptRef && id == other.id;
+  bool operator ==(Object other) => other is ScriptRef && id == other.id;
 
   String toString() => '[ScriptRef id: ${id}, uri: ${uri}]';
 }
@@ -6810,8 +6888,8 @@ class Script extends Obj implements ScriptRef {
 
   Script._fromJson(Map<String, dynamic> json) : super._fromJson(json) {
     uri = json['uri'] ?? '';
-    library = createServiceObject(json['library']!, const ['LibraryRef'])
-        as LibraryRef;
+    library = createServiceObject(json['library'], const ['LibraryRef'])
+        as LibraryRef?;
     lineOffset = json['lineOffset'];
     columnOffset = json['columnOffset'];
     source = json['source'];
@@ -6871,7 +6949,7 @@ class Script extends Obj implements ScriptRef {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is Script && id == other.id;
+  bool operator ==(Object other) => other is Script && id == other.id;
 
   String toString() => '[Script id: ${id}, uri: ${uri}, library: ${library}]';
 }
@@ -6932,7 +7010,7 @@ class SourceLocation extends Response {
 
   SourceLocation._fromJson(Map<String, dynamic> json) : super._fromJson(json) {
     script =
-        createServiceObject(json['script']!, const ['ScriptRef']) as ScriptRef;
+        createServiceObject(json['script'], const ['ScriptRef']) as ScriptRef?;
     tokenPos = json['tokenPos'] ?? -1;
     endTokenPos = json['endTokenPos'];
   }
@@ -7235,7 +7313,7 @@ class Timeline extends Response {
   static Timeline? parse(Map<String, dynamic>? json) =>
       json == null ? null : Timeline._fromJson(json);
 
-  /// A list of timeline events. No order is guarenteed for these events; in
+  /// A list of timeline events. No order is guaranteed for these events; in
   /// particular, these events may be unordered with respect to their
   /// timestamps.
   List<TimelineEvent>? traceEvents;
@@ -7418,7 +7496,7 @@ class TypeArgumentsRef extends ObjRef {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is TypeArgumentsRef && id == other.id;
+  bool operator ==(Object other) => other is TypeArgumentsRef && id == other.id;
 
   String toString() => '[TypeArgumentsRef id: ${id}, name: ${name}]';
 }
@@ -7469,7 +7547,7 @@ class TypeArguments extends Obj implements TypeArgumentsRef {
 
   int get hashCode => id.hashCode;
 
-  operator ==(other) => other is TypeArguments && id == other.id;
+  bool operator ==(Object other) => other is TypeArguments && id == other.id;
 
   String toString() =>
       '[TypeArguments id: ${id}, name: ${name}, types: ${types}]';

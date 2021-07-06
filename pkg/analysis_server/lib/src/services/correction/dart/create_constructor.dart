@@ -6,7 +6,6 @@ import 'package:analysis_server/src/services/correction/dart/abstract_producer.d
 import 'package:analysis_server/src/services/correction/fix.dart';
 import 'package:analysis_server/src/services/correction/util.dart';
 import 'package:analyzer/dart/ast/ast.dart';
-import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/dart/element/type.dart';
 import 'package:analyzer_plugin/utilities/change_builder/change_builder_core.dart';
 import 'package:analyzer_plugin/utilities/fixes/fixes.dart';
@@ -86,8 +85,8 @@ class CreateConstructor extends CorrectionProducer {
     }
 
     // prepare location
-    var targetLocation =
-        CorrectionUtils(targetUnit).prepareNewConstructorLocation(targetNode);
+    var targetLocation = CorrectionUtils(targetUnit)
+        .prepareNewConstructorLocation(resolvedResult.session, targetNode);
     if (targetLocation == null) {
       return;
     }
@@ -119,10 +118,6 @@ class CreateConstructor extends CorrectionProducer {
         !constructorElement.isSynthetic) {
       return;
     }
-    // prepare target
-    if (constructorElement.enclosingElement is! ClassElement) {
-      return;
-    }
 
     // prepare target ClassDeclaration
     var targetElement = constructorElement.enclosingElement;
@@ -141,8 +136,8 @@ class CreateConstructor extends CorrectionProducer {
     }
 
     // prepare location
-    var targetLocation =
-        CorrectionUtils(targetUnit).prepareNewConstructorLocation(targetNode);
+    var targetLocation = CorrectionUtils(targetUnit)
+        .prepareNewConstructorLocation(resolvedResult.session, targetNode);
     if (targetLocation == null) {
       return;
     }

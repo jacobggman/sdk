@@ -507,7 +507,9 @@ abstract class num implements Comparable<num> {
   int toInt();
 }
 
-abstract class Match {}
+abstract class Match {
+  int get start;
+}
 
 class Object {
   const Object();
@@ -519,6 +521,10 @@ class Object {
 
   external String toString();
   external dynamic noSuchMethod(Invocation invocation);
+}
+
+abstract class Enum {
+  int get index;
 }
 
 abstract class Pattern {
@@ -620,6 +626,8 @@ class NativeType {
   const NativeType();
 }
 
+class Handle extends NativeType {}
+
 class Void extends NativeType {}
 
 class Int8 extends NativeType {
@@ -674,7 +682,7 @@ final Pointer<Never> nullptr = Pointer.fromAddress(0);
 
 extension NativeFunctionPointer<NF extends Function>
     on Pointer<NativeFunction<NF>> {
-  external DF asFunction<DF extends Function>();
+  external DF asFunction<DF extends Function>({bool isLeaf:false});
 }
 
 class _Compound extends NativeType {}
@@ -689,11 +697,13 @@ class Packed {
   const Packed(this.memberAlignment);
 }
 
-abstract class DynamicLibrary {}
+abstract class DynamicLibrary {
+  external factory DynamicLibrary.open(String name);
+}
 
 extension DynamicLibraryExtension on DynamicLibrary {
   external F lookupFunction<T extends Function, F extends Function>(
-      String symbolName);
+      String symbolName, {bool isLeaf:false});
 }
 
 abstract class NativeFunction<T extends Function> extends NativeType {}

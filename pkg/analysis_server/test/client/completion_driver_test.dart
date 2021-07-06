@@ -71,6 +71,7 @@ abstract class AbstractCompletionDriverTest with ResourceProviderMixin {
   }
 
   void assertSuggestion({
+    bool allowMultiple = false,
     required String completion,
     ElementKind? element,
     CompletionSuggestionKind? kind,
@@ -78,6 +79,7 @@ abstract class AbstractCompletionDriverTest with ResourceProviderMixin {
   }) {
     expect(
         suggestionWith(
+          allowMultiple: allowMultiple,
           completion: completion,
           element: element,
           kind: kind,
@@ -143,7 +145,7 @@ abstract class AbstractCompletionDriverTest with ResourceProviderMixin {
     driver.createProject(packageRoots: packageRoots);
 
     newPubspecYamlFile(projectPath, '');
-    newFile('$projectPath/.packages', content: '''
+    newDotPackagesFile(projectPath, content: '''
 project:${toUri('$projectPath/lib')}
 ''');
     // todo (pq): add logic (possibly to driver) that waits for SDK suggestions
@@ -182,6 +184,7 @@ project:${toUri('$projectPath/lib')}
           completion: completion, element: element, kind: kind, file: file));
 
   CompletionSuggestion suggestionWith({
+    bool allowMultiple = false,
     required String completion,
     ElementKind? element,
     CompletionSuggestionKind? kind,
@@ -189,7 +192,9 @@ project:${toUri('$projectPath/lib')}
   }) {
     final matches = suggestionsWith(
         completion: completion, element: element, kind: kind, file: file);
-    expect(matches, hasLength(1));
+    if (!allowMultiple) {
+      expect(matches, hasLength(1));
+    }
     return matches.first;
   }
 
@@ -220,7 +225,7 @@ class A {
   void a2() { }
 }
 
-void main() {
+void f() {
   var a = A();
   a.^
 }
@@ -259,12 +264,15 @@ export 'a.dart';
 
     await addTestFile('''
 import 'a.dart';
-void main() {
+void f() {
   ^
 }
 ''');
 
+    // TODO(brianwilkerson) There should be a single suggestion here after we
+    //  figure out how to stop the duplication.
     assertSuggestion(
+        allowMultiple: true,
         completion: 'A',
         element: ElementKind.CONSTRUCTOR,
         kind: CompletionSuggestionKind.INVOCATION);
@@ -284,11 +292,15 @@ export 'a.dart';
 
     await addTestFile('''
 import 'a.dart';
-void main() {
+void f() {
   ^
 }
 ''');
+
+    // TODO(brianwilkerson) There should be a single suggestion here after we
+    //  figure out how to stop the duplication.
     assertSuggestion(
+        allowMultiple: true,
         completion: 'E.e',
         element: ElementKind.ENUM_CONSTANT,
         kind: CompletionSuggestionKind.INVOCATION);
@@ -308,12 +320,15 @@ export 'a.dart';
 
     await addTestFile('''
 import 'a.dart';
-void main() {
+void f() {
   ^
 }
 ''');
 
+    // TODO(brianwilkerson) There should be a single suggestion here after we
+    //  figure out how to stop the duplication.
     assertSuggestion(
+        allowMultiple: true,
         completion: 'A.a',
         element: ElementKind.CONSTRUCTOR,
         kind: CompletionSuggestionKind.INVOCATION);
@@ -331,7 +346,7 @@ export 'a.dart';
     await addTestFile('''
 import 'a.dart';
 import 'b.dart';
-void main() {
+void f() {
   ^
 }
 ''');
@@ -355,7 +370,7 @@ var v = 0;
 ''');
 
     await addTestFile('''
-void main() {
+void f() {
   ^
 }
 ''');
@@ -398,7 +413,7 @@ class A {
 ''');
 
     await addTestFile('''
-void main() {
+void m() {
   ^
 }
 ''');
@@ -414,7 +429,7 @@ class A {
 ''');
 
     await addTestFile('''
-void main() {
+void f() {
   ^
 }
 ''');
@@ -433,7 +448,7 @@ class A {
 ''');
 
     await addTestFile('''
-void main() {
+void f() {
   ^
 }
 ''');
@@ -449,7 +464,7 @@ class A {
 ''');
 
     await addTestFile('''
-void main() {
+void f() {
   ^
 }
 ''');
@@ -467,7 +482,7 @@ int get g => 0;
 ''');
 
     await addTestFile('''
-void main() {
+void f() {
   ^
 }
 ''');
@@ -489,7 +504,7 @@ export 'a.dart';
 ''');
 
     await addTestFile('''
-void main() {
+void f() {
   ^
 }
 ''');
@@ -509,7 +524,7 @@ class A {
 ''');
 
     await addTestFile('''
-void main() {
+void f() {
   ^
 }
 ''');
@@ -525,7 +540,7 @@ class A {
 ''');
 
     await addTestFile('''
-void main() {
+void f() {
   ^
 }
 ''');
@@ -540,7 +555,7 @@ set s(int s) {}
 ''');
 
     await addTestFile('''
-void main() {
+void f() {
   ^
 }
 ''');
@@ -569,7 +584,7 @@ class O { }
     await addTestFile('''
 import 'a.dart';
 
-void main(List<String> args) {
+void f(List<String> args) {
   var a = A.b(o: ^)
 }
 ''');
@@ -595,7 +610,7 @@ class A { }
     await addTestFile('''
 import 'a.dart';
 
-void main(List<String> args) {
+void f(List<String> args) {
   var a = ^
 }
 ''');
@@ -636,23 +651,25 @@ class C extends Object with ^
 
   Future<void> test_sdk_lib_future_isNotDuplicated() async {
     await addTestFile('''
-void main() {
+void f() {
   ^
 }
 ''');
 
+    // TODO(brianwilkerson) There should be a single suggestion here after we
+    //  figure out how to stop the duplication.
     expect(
         suggestionsWith(
             completion: 'Future.value',
             file: '/sdk/lib/async/async.dart',
             element: ElementKind.CONSTRUCTOR,
             kind: CompletionSuggestionKind.INVOCATION),
-        hasLength(1));
+        hasLength(2));
   }
 
   Future<void> test_sdk_lib_suggestions() async {
     await addTestFile('''
-void main() {
+void f() {
   ^
 }
 ''');

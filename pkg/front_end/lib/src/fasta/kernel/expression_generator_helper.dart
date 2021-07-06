@@ -66,6 +66,8 @@ abstract class ExpressionGeneratorHelper implements InferenceHelper {
 
   bool get enableConstFunctionsInLibrary;
 
+  bool get enableConstructorTearOffsInLibrary;
+
   scopeLookup(Scope scope, String name, Token token,
       {bool isQualified: false, PrefixBuilder prefix});
 
@@ -152,6 +154,9 @@ abstract class ExpressionGeneratorHelper implements InferenceHelper {
       Arguments arguments, Expression expression);
 
   DartType buildDartType(UnresolvedType unresolvedType,
+      {bool nonInstanceAccessIsError});
+
+  DartType buildTypeLiteralDartType(UnresolvedType unresolvedType,
       {bool nonInstanceAccessIsError});
 
   List<DartType> buildDartTypeArguments(List<UnresolvedType> unresolvedTypes);

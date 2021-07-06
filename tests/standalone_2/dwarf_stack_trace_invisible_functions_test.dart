@@ -2,7 +2,9 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-/// VMOptions=--dwarf-stack-traces --save-debugging-info=dwarf_invisible_functions.so
+// @dart = 2.9
+
+// VMOptions=--dwarf-stack-traces --save-debugging-info=dwarf_invisible_functions.so
 
 import 'dart:io';
 
@@ -11,11 +13,11 @@ import 'package:path/path.dart' as path;
 
 import 'dwarf_stack_trace_test.dart' as dwarf_stack_trace_test;
 
-const int LINE_A = 23;
-const int LINE_B = 29;
-const int LINE_C = 36;
-const int LINE_D = 44;
-const int LINE_E = 56;
+const int LINE_A = 25;
+const int LINE_B = 31;
+const int LINE_C = 38;
+const int LINE_D = 46;
+const int LINE_E = 58;
 
 @pragma("vm:prefer-inline")
 bar() {

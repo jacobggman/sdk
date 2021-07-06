@@ -3,10 +3,13 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analysis_server/plugin/edit/fix/fix_core.dart';
+import 'package:analysis_server/src/services/completion/dart/extension_cache.dart';
+import 'package:analysis_server/src/services/correction/bulk_fix_processor.dart';
 import 'package:analysis_server/src/services/correction/change_workspace.dart';
 import 'package:analysis_server/src/services/correction/fix.dart';
 import 'package:analysis_server/src/services/correction/fix/dart/top_level_declarations.dart';
 import 'package:analysis_server/src/services/correction/fix_internal.dart';
+import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/error/error.dart';
 import 'package:analyzer/src/dart/analysis/byte_store.dart';
 import 'package:analyzer/src/dart/error/lint_codes.dart';
@@ -71,6 +74,85 @@ abstract class BaseFixProcessorTest extends AbstractSingleUnitTest {
       }
     }
     fail('Expected to find an error with the code: $errorCode');
+  }
+}
+
+/// A base class defining support for writing bulk fix processor tests.
+abstract class BulkFixProcessorTest extends AbstractSingleUnitTest {
+  /// The source change associated with the fix that was found, or `null` if
+  /// neither [assertHasFix] nor [assertHasFixAllFix] has been invoked.
+  late SourceChange change;
+
+  /// The result of applying the [change] to the file content, or `null` if
+  /// neither [assertHasFix] nor [assertHasFixAllFix] has been invoked.
+  late String resultCode;
+
+  /// Return a list of the experiments that are to be enabled for tests in this
+  /// class, or `null` if there are no experiments that should be enabled.
+  List<String>? get experiments => null;
+
+  /// Return the lint code being tested.
+  String? get lintCode => null;
+
+  /// Return `true` if this test uses config files.
+  bool get useConfigFiles => false;
+
+  /// The workspace in which fixes contributor operates.
+  DartChangeWorkspace get workspace {
+    return DartChangeWorkspace([session]);
+  }
+
+  Future<void> assertHasFix(String expected) async {
+    change = await _computeSourceChange();
+
+    // apply to "file"
+    var fileEdits = change.edits;
+    expect(fileEdits, hasLength(1));
+
+    var fileContent = testCode;
+    resultCode = SourceEdit.applySequence(fileContent, change.edits[0].edits);
+    expect(resultCode, expected);
+  }
+
+  Future<void> assertNoFix() async {
+    change = await _computeSourceChange();
+    var fileEdits = change.edits;
+    expect(fileEdits, isEmpty);
+  }
+
+  /// Computes fixes for the specified [testUnit].
+  Future<BulkFixProcessor> computeFixes() async {
+    var tracker = DeclarationsTracker(MemoryByteStore(), resourceProvider);
+    var analysisContext = contextFor(testFile);
+    tracker.addContext(analysisContext);
+    var processor = BulkFixProcessor(TestInstrumentationService(), workspace,
+        useConfigFiles: useConfigFiles);
+    await processor.fixErrors([analysisContext]);
+    return processor;
+  }
+
+  @override
+  void setUp() {
+    super.setUp();
+    verifyNoTestUnitErrors = false;
+    _createAnalysisOptionsFile();
+  }
+
+  /// Returns the source change for computed fixes in the specified [testUnit].
+  Future<SourceChange> _computeSourceChange() async {
+    var processor = await computeFixes();
+    return processor.builder.sourceChange;
+  }
+
+  /// Create the analysis options file needed in order to correctly analyze the
+  /// test file.
+  void _createAnalysisOptionsFile() {
+    var code = lintCode;
+    if (code == null) {
+      createAnalysisOptionsFile(experiments: experiments);
+    } else {
+      createAnalysisOptionsFile(experiments: experiments, lints: [code]);
+    }
   }
 }
 
@@ -172,8 +254,17 @@ abstract class FixProcessorLintTest extends FixProcessorTest {
 
 /// A base class defining support for writing fix processor tests.
 abstract class FixProcessorTest extends BaseFixProcessorTest {
+  /// The extension cache used for test purposes.
+  ExtensionCache extensionCache = ExtensionCache();
+
   /// Return the kind of fixes being tested by this test class.
   FixKind get kind;
+
+  Future<void> addUnimportedFile(String filePath, String content) async {
+    addSource(filePath, content);
+    var result = await session.getResolvedUnit2(convertPath(filePath));
+    extensionCache.cacheFromResult(result as ResolvedUnitResult);
+  }
 
   Future<void> assertHasFix(String expected,
       {bool Function(AnalysisError)? errorFilter,
@@ -232,6 +323,22 @@ abstract class FixProcessorTest extends BaseFixProcessorTest {
     expect(resultCode, expected);
   }
 
+  /// Computes an error from [errorFilter], and verifies that
+  /// [expectedNumberOfFixesForKind] fixes of the appropriate kind are found,
+  /// and that they have messages equal to [matchFixMessages].
+  Future<void> assertHasFixesWithoutApplying({
+    bool Function(AnalysisError)? errorFilter,
+    required int expectedNumberOfFixesForKind,
+    required List<String> matchFixMessages,
+  }) async {
+    var error = await _findErrorToFix(errorFilter: errorFilter);
+    await _assertHasFixes(
+      error,
+      expectedNumberOfFixesForKind: expectedNumberOfFixesForKind,
+      matchFixMessages: matchFixMessages,
+    );
+  }
+
   Future<void> assertHasFixWithoutApplying(
       {bool Function(AnalysisError)? errorFilter}) async {
     var error = await _findErrorToFix(errorFilter: errorFilter);
@@ -283,9 +390,14 @@ abstract class FixProcessorTest extends BaseFixProcessorTest {
     useLineEndingsForPlatform = true;
   }
 
-  /// Computes fixes and verifies that there is a fix for the given [error] of the appropriate kind.
-  /// Optionally, if a [matchFixMessage] is passed, then the kind as well as the fix message must
-  /// match to be returned.
+  /// Computes fixes, verifies that there is a fix for the given [error] of
+  /// the appropriate kind, and returns the fix.
+  ///
+  /// If a [matchFixMessage] is passed, then the kind as well as the fix message
+  /// must match to be returned.
+  ///
+  /// If [expectedNumberOfFixesForKind] is non-null, then the number of fixes
+  /// for [kind] is verified to be [expectedNumberOfFixesForKind].
   Future<Fix> _assertHasFix(AnalysisError error,
       {int? expectedNumberOfFixesForKind,
       String? matchFixMessage,
@@ -294,16 +406,7 @@ abstract class FixProcessorTest extends BaseFixProcessorTest {
     var fixes = await _computeFixes(error);
 
     if (expectedNumberOfFixesForKind != null) {
-      var actualNumberOfFixesForKind = 0;
-      for (var fix in fixes) {
-        if (fix.kind == kind) {
-          actualNumberOfFixesForKind++;
-        }
-      }
-      if (actualNumberOfFixesForKind != expectedNumberOfFixesForKind) {
-        fail('Expected $expectedNumberOfFixesForKind fixes of kind $kind,'
-            ' but found $actualNumberOfFixesForKind:\n${fixes.join('\n')}');
-      }
+      _assertNumberOfFixesForKind(fixes, expectedNumberOfFixesForKind);
     }
 
     // If a matchFixMessage was provided,
@@ -364,6 +467,21 @@ abstract class FixProcessorTest extends BaseFixProcessorTest {
     return foundFix;
   }
 
+  /// Computes fixes and verifies that there are [expectedNumberOfFixesForKind]
+  /// fixes for the given [error] of the appropriate kind, and that the messages
+  /// of the fixes are equal to [matchFixMessages].
+  Future<void> _assertHasFixes(
+    AnalysisError error, {
+    required int expectedNumberOfFixesForKind,
+    required List<String> matchFixMessages,
+  }) async {
+    // Compute the fixes for this AnalysisError
+    var fixes = await _computeFixes(error);
+    _assertNumberOfFixesForKind(fixes, expectedNumberOfFixesForKind);
+    var actualFixMessages = [for (var fix in fixes) fix.change.message];
+    expect(actualFixMessages, containsAllInOrder(matchFixMessages));
+  }
+
   Future<void> _assertNoFix(AnalysisError error) async {
     var fixes = await _computeFixes(error);
     for (var fix in fixes) {
@@ -386,12 +504,23 @@ abstract class FixProcessorTest extends BaseFixProcessorTest {
     }
   }
 
+  void _assertNumberOfFixesForKind(
+      List<Fix> fixes, int expectedNumberOfFixesForKind) {
+    var actualNumberOfFixesForKind =
+        fixes.where((fix) => fix.kind == kind).length;
+    if (actualNumberOfFixesForKind != expectedNumberOfFixesForKind) {
+      fail('Expected $expectedNumberOfFixesForKind fixes of kind $kind,'
+          ' but found $actualNumberOfFixesForKind:\n${fixes.join('\n')}');
+    }
+  }
+
   /// Computes fixes for the given [error] in [testUnit].
   Future<List<Fix>> _computeFixes(AnalysisError error) async {
     var analysisContext = contextFor(testFile);
 
     var tracker = DeclarationsTracker(MemoryByteStore(), resourceProvider);
     tracker.addContext(analysisContext);
+    extensionCache.cacheFromResult(testAnalysisResult);
 
     var context = DartFixContextImpl(
       TestInstrumentationService(),
@@ -403,6 +532,7 @@ abstract class FixProcessorTest extends BaseFixProcessorTest {
         provider.doTrackerWork();
         return provider.get(analysisContext, testFile, name);
       },
+      extensionCache: extensionCache,
     );
     return await DartFixContributor().computeFixes(context);
   }

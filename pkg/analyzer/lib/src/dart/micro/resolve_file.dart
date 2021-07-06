@@ -55,6 +55,11 @@ class CiderSearchMatch {
       object is CiderSearchMatch &&
       path == object.path &&
       const ListEquality<int>().equals(offsets, object.offsets);
+
+  @override
+  String toString() {
+    return '($path, $offsets)';
+  }
 }
 
 class FileContext {
@@ -167,7 +172,8 @@ class FileResolver {
 
     // Schedule disposing references to cached unlinked data.
     for (var removedFile in removedFiles) {
-      removedCacheIds.add(removedFile.id);
+      removedCacheIds.add(removedFile.unlinkedId);
+      removedCacheIds.add(removedFile.informativeId);
     }
 
     // Remove libraries represented by removed files.
@@ -406,7 +412,8 @@ class FileResolver {
   void removeFilesNotNecessaryForAnalysisOf(List<String> files) {
     var removedFiles = fsState!.removeUnusedFiles(files);
     for (var removedFile in removedFiles) {
-      removedCacheIds.add(removedFile.id);
+      removedCacheIds.add(removedFile.unlinkedId);
+      removedCacheIds.add(removedFile.informativeId);
     }
   }
 
@@ -445,8 +452,16 @@ class FileResolver {
         completionPath: path,
         performance: performance,
       );
-      var result =
-          libraryUnit.units!.firstWhere((element) => element.path == path);
+      var result = libraryUnit.units!
+          .firstWhereOrNull((element) => element.path == path);
+      // TODO(scheglov) Fix and remove.
+      if (result == null) {
+        throw StateError('''
+libraryFile.path: ${libraryFile.path}
+path: $path
+units: ${libraryUnit.units!.map((e) => '(${e.uri} = ${e.path})').toList()}
+''');
+      }
       return result;
     });
   }
@@ -861,16 +876,21 @@ class _LibraryContext {
 
             inputUnits.add(
               link2.LinkInputUnit(
-                partUriStr,
-                file.source,
-                isSynthetic,
-                unit,
+                // TODO(scheglov) bad, group part data
+                partDirectiveIndex: partIndex - 1,
+                partUriStr: partUriStr,
+                source: file.source,
+                isSynthetic: isSynthetic,
+                unit: unit,
               ),
             );
           }
 
           inputLibraries.add(
-            link2.LinkInputLibrary(librarySource, inputUnits),
+            link2.LinkInputLibrary(
+              source: librarySource,
+              units: inputUnits,
+            ),
           );
         }
         inputsTimer.stop();
@@ -888,16 +908,15 @@ class _LibraryContext {
       } else {
         performance.getDataInt('bytesGet').add(resolutionBytes.length);
         performance.getDataInt('libraryLoadCount').add(cycle.libraries.length);
+        elementFactory.addBundle(
+          BundleReader(
+            elementFactory: elementFactory,
+            unitsInformativeBytes: unitsInformativeBytes,
+            resolutionBytes: resolutionBytes as Uint8List,
+          ),
+        );
       }
       cycle.resolutionId = resolutionData!.id;
-
-      elementFactory.addBundle(
-        BundleReader(
-          elementFactory: elementFactory,
-          unitsInformativeBytes: unitsInformativeBytes,
-          resolutionBytes: resolutionBytes as Uint8List,
-        ),
-      );
 
       // We might have just linked dart:core, ensure the type provider.
       _createElementFactoryTypeProvider();

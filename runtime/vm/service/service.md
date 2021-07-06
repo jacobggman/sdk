@@ -1,8 +1,8 @@
-# Dart VM Service Protocol 3.45
+# Dart VM Service Protocol 3.48
 
 > Please post feedback to the [observatory-discuss group][discuss-list]
 
-This document describes of _version 3.45_ of the Dart VM Service Protocol. This
+This document describes of _version 3.48_ of the Dart VM Service Protocol. This
 protocol is used to communicate with a running Dart Virtual Machine.
 
 To use the Service Protocol, start the VM with the *--observe* flag.
@@ -1477,6 +1477,7 @@ streamId | event types provided
 VM | VMUpdate, VMFlagUpdate
 Isolate | IsolateStart, IsolateRunnable, IsolateExit, IsolateUpdate, IsolateReload, ServiceExtensionAdded
 Debug | PauseStart, PauseExit, PauseBreakpoint, PauseInterrupted, PauseException, PausePostRequest, Resume, BreakpointAdded, BreakpointResolved, BreakpointRemoved, BreakpointUpdated, Inspect, None
+Profiler | UserTagChanged
 GC | GC
 Extension | Extension
 Timeline | TimelineEvents, TimelineStreamsSubscriptionUpdate
@@ -1687,6 +1688,12 @@ been loaded (i.e. a deferred library).
 class @Class extends @Object {
   // The name of this class.
   string name;
+
+  // The location of this class in the source code.
+  SourceLocation location [optional];
+
+  // The library which contains this class.
+  @Library library;
 }
 ```
 
@@ -1696,6 +1703,12 @@ _@Class_ is a reference to a _Class_.
 class Class extends Object {
   // The name of this class.
   string name;
+
+  // The location of this class in the source code.
+  SourceLocation location [optional];
+
+  // The library which contains this class.
+  @Library library;
 
   // The error which occurred during class finalization, if it exists.
   @Error error [optional];
@@ -1708,12 +1721,6 @@ class Class extends Object {
 
   // Are allocations of this class being traced?
   bool traceAllocations;
-
-  // The library which contains this class.
-  @Library library;
-
-  // The location of this class in the source code.
-  SourceLocation location [optional];
 
   // The superclass of this class, if any.
   @Class super [optional];
@@ -2148,6 +2155,12 @@ class Event extends Response {
   // This is provided for the event kinds:
   //   HeapSnapshot
   bool last [optional];
+
+  // The current UserTag label.
+  string updatedTag [optional];
+
+  // The previous UserTag label.
+  string previousTag [optional];
 }
 ```
 
@@ -2258,6 +2271,9 @@ enum EventKind {
   // Notification that a Service has been removed from the Service Protocol
   // from another client.
   ServiceUnregistered,
+
+  // Notification that the UserTag for an isolate has been changed.
+  UserTagChanged,
 }
 ```
 
@@ -2298,6 +2314,9 @@ class @Field extends @Object {
 
   // Is this field static?
   bool static;
+
+  // The location of this field in the source code.
+  SourceLocation location [optional];
 }
 ```
 
@@ -2327,12 +2346,12 @@ class Field extends Object {
   // Is this field static?
   bool static;
 
+  // The location of this field in the source code.
+  SourceLocation location [optional];
+
   // The value of this field, if the field is static. If uninitialized,
   // this will take the value of an uninitialized Sentinel.
   @Instance|Sentinel staticValue [optional];
-
-  // The location of this field in the source code.
-  SourceLocation location [optional];
 }
 ```
 
@@ -2401,6 +2420,9 @@ class @Function extends @Object {
 
   // Is this function const?
   bool const;
+
+  // The location of this function in the source code.
+  SourceLocation location [optional];
 }
 ```
 
@@ -3018,14 +3040,14 @@ _@IsolateGroup_ is a reference to an _IsolateGroup_ object.
 
 ```
 class IsolateGroup extends Response {
-  // The id which is passed to the getIsolate RPC to reload this
+  // The id which is passed to the getIsolateGroup RPC to reload this
   // isolate.
   string id;
 
   // A numeric id for this isolate, represented as a string. Unique.
   string number;
 
-  // A name identifying this isolate. Not guaranteed to be unique.
+  // A name identifying this isolate group. Not guaranteed to be unique.
   string name;
 
   // Specifies whether the isolate group was spawned by the VM or embedder for
@@ -3037,7 +3059,7 @@ class IsolateGroup extends Response {
 }
 ```
 
-An _Isolate_ object provides information about one isolate in the VM.
+An _IsolateGroup_ object provides information about an isolate group in the VM.
 
 ### InboundReferences
 
@@ -3143,6 +3165,12 @@ class LibraryDependency {
 
   // The library being imported or exported.
   @Library target;
+
+  // The list of symbols made visible from this dependency.
+  string[] shows [optional];
+
+  // The list of symbols hidden from this dependency.
+  string[] hides [optional];
 }
 ```
 
@@ -4038,5 +4066,8 @@ version | comments
 3.43 | Updated heap snapshot format to include identity hash codes. Added `getAllocationTraces` and `setTraceClassAllocation` RPCs, updated `CpuSample` to include `identityHashCode` and `classId` properties, updated `Class` to include `traceAllocations` property.
 3.44 | Added `identityHashCode` property to `@Instance` and `Instance`.
 3.45 | Added `setBreakpointState` RPC and `BreakpointUpdated` event kind.
+3.46 | Moved `sourceLocation` property into reference types for `Class`, `Field`, and `Function`.
+3.47 | Added `shows` and `hides` properties to `LibraryDependency`.
+3.48 | Added `Profiler` stream, `UserTagChanged` event kind, and `updatedTag` and `previousTag` properties to `Event`.
 
 [discuss-list]: https://groups.google.com/a/dartlang.org/forum/#!forum/observatory-discuss

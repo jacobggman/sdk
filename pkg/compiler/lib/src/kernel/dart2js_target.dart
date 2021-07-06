@@ -17,6 +17,7 @@ import 'package:kernel/reference_from_index.dart';
 import 'package:kernel/target/changed_structure_notifier.dart';
 import 'package:kernel/target/targets.dart';
 
+import '../options.dart';
 import 'invocation_mirror_constants.dart';
 import 'transformations/lowering.dart' as lowering show transformLibraries;
 
@@ -77,17 +78,20 @@ class Dart2jsTarget extends Target {
   @override
   final String name;
 
-  final bool omitLateNames;
+  final CompilerOptions options;
 
   Map<String, ir.Class> _nativeClasses;
 
-  Dart2jsTarget(this.name, this.flags, {this.omitLateNames = false});
+  Dart2jsTarget(this.name, this.flags, {this.options});
 
   @override
   bool get enableNoSuchMethodForwarders => true;
 
   @override
-  final int enabledLateLowerings = _enabledLateLowerings;
+  int get enabledLateLowerings =>
+      (options != null && options.experimentLateInstanceVariables)
+          ? LateLowering.none
+          : _enabledLateLowerings;
 
   @override
   bool get supportsLateLoweringSentinel => true;
@@ -112,6 +116,7 @@ class Dart2jsTarget extends Target {
         'dart:_interceptors',
         'dart:_js_helper',
         'dart:_late_helper',
+        'dart:js',
         'dart:js_util'
       ];
 
@@ -149,7 +154,7 @@ class Dart2jsTarget extends Target {
       {void logger(String msg),
       ChangedStructureNotifier changedStructureNotifier}) {
     _nativeClasses ??= JsInteropChecks.getNativeClasses(component);
-    var jsUtilOptimizer = JsUtilOptimizer(coreTypes);
+    var jsUtilOptimizer = JsUtilOptimizer(coreTypes, hierarchy);
     for (var library in libraries) {
       // TODO (rileyporter): Merge js_util optimizations with other lowerings
       // in the single pass in `transformations/lowering.dart`.
@@ -160,8 +165,7 @@ class Dart2jsTarget extends Target {
               _nativeClasses)
           .visitLibrary(library);
     }
-    lowering.transformLibraries(libraries, coreTypes, hierarchy,
-        omitLateNames: omitLateNames);
+    lowering.transformLibraries(libraries, coreTypes, hierarchy, options);
     logger?.call("Lowering transformations performed");
   }
 

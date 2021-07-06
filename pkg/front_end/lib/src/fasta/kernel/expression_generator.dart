@@ -15,6 +15,8 @@ import 'package:_fe_analyzer_shared/src/scanner/token.dart' show Token;
 import 'package:kernel/ast.dart';
 
 import '../builder/builder.dart';
+import '../builder/class_builder.dart';
+import '../builder/constructor_builder.dart';
 import '../builder/declaration_builder.dart';
 import '../builder/extension_builder.dart';
 import '../builder/invalid_type_declaration_builder.dart';
@@ -251,6 +253,13 @@ abstract class Generator {
   /*Expression | Generator*/ buildUnaryOperation(Token token, Name unaryName) {
     return _forest.createUnary(
         offsetForToken(token), unaryName, buildSimpleRead());
+  }
+
+  /*Expression|Generator*/ applyTypeArguments(
+      int fileOffset, List<UnresolvedType> typeArguments) {
+    return new Instantiation(
+        buildSimpleRead(), _helper.buildDartTypeArguments(typeArguments))
+      ..fileOffset = fileOffset;
   }
 
   /// Returns a [TypeBuilder] for this subexpression instantiated with the
@@ -2940,6 +2949,7 @@ class DeferredAccessGenerator extends Generator {
 ///
 class TypeUseGenerator extends ReadOnlyAccessGenerator {
   final TypeDeclarationBuilder declaration;
+  List<UnresolvedType> typeArguments;
 
   TypeUseGenerator(ExpressionGeneratorHelper helper, Token token,
       this.declaration, String targetName)
@@ -3035,10 +3045,11 @@ class TypeUseGenerator extends ReadOnlyAccessGenerator {
       } else {
         super.expression = _forest.createTypeLiteral(
             offsetForToken(token),
-            _helper.buildDartType(
+            _helper.buildTypeLiteralDartType(
                 new UnresolvedType(
                     buildTypeWithResolvedArguments(
-                        _helper.libraryBuilder.nonNullableBuilder, null),
+                        _helper.libraryBuilder.nonNullableBuilder,
+                        typeArguments),
                     fileOffset,
                     _uri),
                 nonInstanceAccessIsError: true));
@@ -3071,7 +3082,24 @@ class TypeUseGenerator extends ReadOnlyAccessGenerator {
       if (member == null) {
         // If we find a setter, [member] is an [AccessErrorBuilder], not null.
         if (send is IncompletePropertyAccessGenerator) {
-          generator = new UnresolvedNameGenerator(_helper, send.token, name);
+          if (_helper.enableConstructorTearOffsInLibrary &&
+              declarationBuilder is ClassBuilder) {
+            Builder constructor = declarationBuilder.findConstructorOrFactory(
+                name.text,
+                offsetForToken(send.token),
+                _uri,
+                _helper.libraryBuilder);
+            if (constructor is ConstructorBuilder) {
+              return _helper.forest.createConstructorTearOff(
+                  token.charOffset, constructor.constructor);
+            } else {
+              // TODO(dmitryas): Add support for factories.
+              generator =
+                  new UnresolvedNameGenerator(_helper, send.token, name);
+            }
+          } else {
+            generator = new UnresolvedNameGenerator(_helper, send.token, name);
+          }
         } else {
           return _helper.buildConstructorInvocation(
               declaration,
@@ -3159,6 +3187,12 @@ class TypeUseGenerator extends ReadOnlyAccessGenerator {
           arguments, "", typeArguments, token.charOffset, Constness.implicit,
           isTypeArgumentsInForest: isTypeArgumentsInForest);
     }
+  }
+
+  @override
+  applyTypeArguments(int fileOffset, List<UnresolvedType> typeArguments) {
+    return new TypeUseGenerator(_helper, token, declaration, targetName)
+      ..typeArguments = typeArguments;
   }
 }
 

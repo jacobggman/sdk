@@ -2745,6 +2745,7 @@ static RangeBoundary::RangeSize RepresentationToRangeSize(Representation r) {
     case kUnboxedUint8:  // Overapproximate Uint8 as Int16.
       return RangeBoundary::kRangeBoundaryInt16;
     case kUnboxedInt32:
+    case kUnboxedUint16:  // Overapproximate Uint16 as Int32.
       return RangeBoundary::kRangeBoundaryInt32;
     case kUnboxedInt64:
     case kUnboxedUint32:  // Overapproximate Uint32 as Int64.
@@ -2792,6 +2793,7 @@ void LoadFieldInstr::InferRange(RangeAnalysis* analysis, Range* range) {
     case Slot::Kind::kGrowableObjectArray_data:
     case Slot::Kind::kContext_parent:
     case Slot::Kind::kTypeArguments:
+    case Slot::Kind::kArray_type_arguments:
     case Slot::Kind::kClosure_context:
     case Slot::Kind::kClosure_delayed_type_arguments:
     case Slot::Kind::kClosure_function:
@@ -2799,7 +2801,7 @@ void LoadFieldInstr::InferRange(RangeAnalysis* analysis, Range* range) {
     case Slot::Kind::kClosure_instantiator_type_arguments:
     case Slot::Kind::kFunction_data:
     case Slot::Kind::kFunction_signature:
-    case Slot::Kind::kFunctionType_parameter_names:
+    case Slot::Kind::kFunctionType_named_parameter_names:
     case Slot::Kind::kFunctionType_parameter_types:
     case Slot::Kind::kFunctionType_type_parameters:
     case Slot::Kind::kPointerBase_data_field:

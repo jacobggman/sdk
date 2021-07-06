@@ -25,6 +25,8 @@ class LintNames {
       'avoid_return_types_on_setters';
   static const String avoid_returning_null_for_future =
       'avoid_returning_null_for_future';
+  static const String avoid_returning_null_for_void =
+      'avoid_returning_null_for_void';
   static const String avoid_single_cascade_in_expression_statements =
       'avoid_single_cascade_in_expression_statements';
   static const String avoid_types_as_parameter_names =
@@ -42,6 +44,7 @@ class LintNames {
   static const String empty_catches = 'empty_catches';
   static const String empty_constructor_bodies = 'empty_constructor_bodies';
   static const String empty_statements = 'empty_statements';
+  static const String exhaustive_cases = 'exhaustive_cases';
   static const String hash_and_equals = 'hash_and_equals';
   static const String no_duplicate_case_values = 'no_duplicate_case_values';
   static const String non_constant_identifier_names =
@@ -85,8 +88,11 @@ class LintNames {
   static const String prefer_relative_imports = 'prefer_relative_imports';
   static const String prefer_single_quotes = 'prefer_single_quotes';
   static const String prefer_spread_collections = 'prefer_spread_collections';
+  static const String prefer_typing_uninitialized_variables =
+      'prefer_typing_uninitialized_variables';
   static const String slash_for_doc_comments = 'slash_for_doc_comments';
   static const String sort_child_properties_last = 'sort_child_properties_last';
+  static const String sort_constructors_first = 'sort_constructors_first';
   static const String type_annotate_public_apis = 'type_annotate_public_apis';
   static const String type_init_formals = 'type_init_formals';
   static const String unawaited_futures = 'unawaited_futures';
@@ -102,6 +108,7 @@ class LintNames {
       'unnecessary_nullable_for_final_variable_declarations';
   static const String unnecessary_overrides = 'unnecessary_overrides';
   static const String unnecessary_parenthesis = 'unnecessary_parenthesis';
+  static const String unnecessary_string_escapes = 'unnecessary_string_escapes';
   static const String unnecessary_string_interpolations =
       'unnecessary_string_interpolations';
   static const String unnecessary_this = 'unnecessary_this';
@@ -109,5 +116,7 @@ class LintNames {
       'use_full_hex_values_for_flutter_colors';
   static const String use_function_type_syntax_for_parameters =
       'use_function_type_syntax_for_parameters';
+  static const String use_key_in_widget_constructors =
+      'use_key_in_widget_constructors';
   static const String use_rethrow_when_possible = 'use_rethrow_when_possible';
 }

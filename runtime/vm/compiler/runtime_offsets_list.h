@@ -37,6 +37,7 @@
 //
 // COMMON_OFFSETS_LIST is for declarations that are valid in all contexts.
 // JIT_OFFSETS_LIST is for declarations that are only valid in JIT mode.
+// AOT_OFFSETS_LIST is for declarations that are only valid in AOT mode.
 // A declaration that is not valid in product mode can be wrapped with
 // NOT_IN_PRODUCT().
 //
@@ -77,7 +78,7 @@
   CONSTANT(NativeEntry, kNumCallWrapperArguments)                              \
   CONSTANT(String, kMaxElements)                                               \
   CONSTANT(SubtypeTestCache, kFunctionTypeArguments)                           \
-  CONSTANT(SubtypeTestCache, kInstanceClassIdOrFunction)                       \
+  CONSTANT(SubtypeTestCache, kInstanceCidOrSignature)                          \
   CONSTANT(SubtypeTestCache, kDestinationType)                                 \
   CONSTANT(SubtypeTestCache, kInstanceDelayedFunctionTypeArguments)            \
   CONSTANT(SubtypeTestCache, kInstanceParentFunctionTypeArguments)             \
@@ -289,9 +290,10 @@
   FIELD(Type, type_state_offset)                                               \
   FIELD(Type, nullability_offset)                                              \
   FIELD(FunctionType, hash_offset)                                             \
-  FIELD(FunctionType, packed_fields_offset)                                    \
+  FIELD(FunctionType, packed_parameter_counts_offset)                          \
+  FIELD(FunctionType, packed_type_parameter_counts_offset)                     \
   FIELD(FunctionType, parameter_types_offset)                                  \
-  FIELD(FunctionType, parameter_names_offset)                                  \
+  FIELD(FunctionType, named_parameter_names_offset)                            \
   FIELD(FunctionType, type_parameters_offset)                                  \
   FIELD(TypeParameter, parameterized_class_id_offset)                          \
   FIELD(TypeParameter, index_offset)                                           \
@@ -378,6 +380,7 @@
   SIZEOF(RegExp, InstanceSize, UntaggedRegExp)                                 \
   SIZEOF(Script, InstanceSize, UntaggedScript)                                 \
   SIZEOF(SendPort, InstanceSize, UntaggedSendPort)                             \
+  SIZEOF(Sentinel, InstanceSize, UntaggedSentinel)                             \
   SIZEOF(SingleTargetCache, InstanceSize, UntaggedSingleTargetCache)           \
   SIZEOF(StackTrace, InstanceSize, UntaggedStackTrace)                         \
   SIZEOF(String, InstanceSize, UntaggedString)                                 \
@@ -408,5 +411,9 @@
                          RANGE, CONSTANT)                                      \
   FIELD(Function, usage_counter_offset)                                        \
   FIELD(ICData, receivers_static_type_offset)
+
+#define AOT_OFFSETS_LIST(FIELD, ARRAY, SIZEOF, ARRAY_SIZEOF, PAYLOAD_SIZEOF,   \
+                         RANGE, CONSTANT)                                      \
+  FIELD(Closure, entry_point_offset)
 
 #endif  // RUNTIME_VM_COMPILER_RUNTIME_OFFSETS_LIST_H_

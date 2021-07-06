@@ -75,7 +75,13 @@ import '../dill/dill_library_builder.dart' show DillLibraryBuilder;
 
 import '../fasta_codes.dart' as fasta;
 
-import '../fasta_codes.dart' show LocatedMessage, Message, noLength, Template;
+import '../fasta_codes.dart'
+    show
+        LocatedMessage,
+        Message,
+        Template,
+        noLength,
+        templateExperimentNotEnabled;
 
 import '../identifiers.dart'
     show Identifier, InitializedIdentifier, QualifiedName, flattenName;
@@ -444,6 +450,11 @@ class BodyBuilder extends ScopeListener<JumpTarget>
   @override
   bool get enableConstFunctionsInLibrary {
     return libraryBuilder.enableConstFunctionsInLibrary;
+  }
+
+  @override
+  bool get enableConstructorTearOffsInLibrary {
+    return libraryBuilder.enableConstructorTearOffsInLibrary;
   }
 
   void _enterLocalState({bool inLateLocalInitializer: false}) {
@@ -6295,6 +6306,34 @@ class BodyBuilder extends ScopeListener<JumpTarget>
   }
 
   @override
+  void handleTypeArgumentApplication(Token openAngleBracket) {
+    assert(checkState(openAngleBracket, [
+      ValueKinds.TypeArguments,
+      unionOfKinds([ValueKinds.Generator, ValueKinds.Expression])
+    ]));
+    List<UnresolvedType> typeArguments = pop(); // typeArguments
+    if (libraryBuilder.enableConstructorTearOffsInLibrary) {
+      Object operand = pop();
+      if (operand is Generator) {
+        push(operand.applyTypeArguments(
+            openAngleBracket.charOffset, typeArguments));
+      } else {
+        push(new Instantiation(
+            toValue(operand), buildDartTypeArguments(typeArguments))
+          ..fileOffset = openAngleBracket.charOffset);
+      }
+    } else {
+      addProblem(
+          templateExperimentNotEnabled.withArguments(
+              'constructor-tearoffs',
+              libraryBuilder.enableConstructorTearOffsVersionInLibrary
+                  .toText()),
+          openAngleBracket.charOffset,
+          noLength);
+    }
+  }
+
+  @override
   UnresolvedType validateTypeUse(UnresolvedType unresolved,
       {bool nonInstanceAccessIsError, bool allowPotentiallyConstantType}) {
     assert(nonInstanceAccessIsError != null);
@@ -6547,6 +6586,18 @@ class BodyBuilder extends ScopeListener<JumpTarget>
   }
 
   @override
+  DartType buildTypeLiteralDartType(UnresolvedType unresolvedType,
+      {bool nonInstanceAccessIsError: false,
+      bool allowPotentiallyConstantType: false}) {
+    if (unresolvedType == null) return null;
+    return validateTypeUse(unresolvedType,
+            nonInstanceAccessIsError: nonInstanceAccessIsError,
+            allowPotentiallyConstantType: allowPotentiallyConstantType)
+        .builder
+        ?.buildTypeLiteralType(libraryBuilder);
+  }
+
+  @override
   List<DartType> buildDartTypeArguments(List<UnresolvedType> unresolvedTypes) {
     if (unresolvedTypes == null) return <DartType>[];
     List<DartType> types =
@@ -6571,6 +6622,17 @@ class BodyBuilder extends ScopeListener<JumpTarget>
       className = cls.name;
     }
     return name.isEmpty ? className : "$className.$name";
+  }
+
+  @override
+  void handleNewAsIdentifier(Token token) {
+    // TODO(johnniwinther, paulberry): disable this error when the
+    // "constructor-tearoffs" feature is enabled.
+    addProblem(
+        templateExperimentNotEnabled.withArguments('constructor-tearoffs',
+            libraryBuilder.enableConstructorTearOffsVersionInLibrary.toText()),
+        token.charOffset,
+        token.length);
   }
 }
 
@@ -6838,9 +6900,25 @@ Block combineStatements(Statement statement, Statement body) {
   }
 }
 
+/// DartDocTest(
+///   debugName("myClassName", "myName", "myPrefix"),
+///   "myPrefix.myClassName.myName"
+/// )
+/// DartDocTest(
+///   debugName("myClassName", "myName"),
+///   "myClassName.myName"
+/// )
+/// DartDocTest(
+///   debugName("myClassName", ""),
+///   "myClassName"
+/// )
+/// DartDocTest(
+///   debugName("", ""),
+///   ""
+/// )
 String debugName(String className, String name, [String prefix]) {
   String result = name.isEmpty ? className : "$className.$name";
-  return prefix == null ? result : "$prefix.result";
+  return prefix == null ? result : "$prefix.$result";
 }
 
 // TODO(johnniwinther): This is a bit ad hoc. Call sites should know what kind

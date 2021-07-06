@@ -3,6 +3,7 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analysis_server/plugin/edit/fix/fix_dart.dart';
+import 'package:analysis_server/src/services/completion/dart/extension_cache.dart';
 import 'package:analysis_server/src/services/correction/fix/dart/top_level_declarations.dart';
 import 'package:analysis_server/src/services/linter/lint_names.dart';
 import 'package:analyzer/dart/analysis/results.dart';
@@ -129,11 +130,16 @@ class DartFixContextImpl implements DartFixContext {
   @override
   final AnalysisError error;
 
+  @override
+  final ExtensionCache extensionCache;
+
   final List<TopLevelDeclaration> Function(String name)
       getTopLevelDeclarationsFunction;
 
   DartFixContextImpl(this.instrumentationService, this.workspace,
-      this.resolveResult, this.error, this.getTopLevelDeclarationsFunction);
+      this.resolveResult, this.error, this.getTopLevelDeclarationsFunction,
+      {ExtensionCache? extensionCache})
+      : extensionCache = extensionCache ?? ExtensionCache();
 
   @override
   List<TopLevelDeclaration> getTopLevelDeclarations(String name) {
@@ -173,6 +179,10 @@ class DartFixKind {
       'dart.fix.add.fieldFormalParameters',
       70,
       'Add final field formal parameters');
+  static const ADD_KEY_TO_CONSTRUCTORS = FixKind(
+      'dart.fix.add.keyToConstructors',
+      DartFixKindPriority.DEFAULT,
+      "Add 'key' to constructors");
   static const ADD_LATE = FixKind(
       'dart.fix.add.late', DartFixKindPriority.DEFAULT, "Add 'late' modifier");
   static const ADD_MISSING_ENUM_CASE_CLAUSES = FixKind(
@@ -311,6 +321,10 @@ class DartFixKind {
       'dart.fix.convert.toIntLiteral.multi',
       DartFixKindPriority.IN_FILE,
       'Convert to int literals everywhere in file');
+  static const CONVERT_TO_IS_NOT = FixKind(
+      'dart.fix.convert.isNot', DartFixKindPriority.DEFAULT, 'Convert to is!');
+  static const CONVERT_TO_IS_NOT_MULTI = FixKind('dart.fix.convert.isNot.multi',
+      DartFixKindPriority.IN_FILE, 'Convert to is! everywhere in file');
   static const CONVERT_TO_LINE_COMMENT = FixKind(
       'dart.fix.convert.toLineComment',
       DartFixKindPriority.DEFAULT,
@@ -437,6 +451,10 @@ class DartFixKind {
       FixKind('dart.fix.dataDriven', DartFixKindPriority.DEFAULT, '{0}');
   static const EXTEND_CLASS_FOR_MIXIN = FixKind('dart.fix.extendClassForMixin',
       DartFixKindPriority.DEFAULT, "Extend the class '{0}'");
+  static const IGNORE_ERROR_LINE = FixKind('dart.fix.ignore.line',
+      DartFixKindPriority.IGNORE, "Ignore '{0}' for this line");
+  static const IGNORE_ERROR_FILE = FixKind('dart.fix.ignore.file',
+      DartFixKindPriority.IGNORE - 1, "Ignore '{0}' for this file");
   static const IMPORT_ASYNC =
       FixKind('dart.fix.import.async', 49, "Import 'dart:async'");
   static const IMPORT_LIBRARY_PREFIX = FixKind('dart.fix.import.libraryPrefix',
@@ -617,14 +635,20 @@ class DartFixKind {
       'dart.fix.remove.questionMark.multi',
       DartFixKindPriority.IN_FILE,
       'Remove unnecessary question marks in file');
+  static const REMOVE_RETURNED_VALUE = FixKind('dart.fix.remove.returnedValue',
+      DartFixKindPriority.DEFAULT, 'Remove invalid returned value');
+  static const REMOVE_RETURNED_VALUE_MULTI = FixKind(
+      'dart.fix.remove.returnedValue.multi',
+      DartFixKindPriority.IN_FILE,
+      'Remove invalid returned values in file');
   static const REMOVE_THIS_EXPRESSION = FixKind(
       'dart.fix.remove.thisExpression',
       DartFixKindPriority.DEFAULT,
-      'Remove this expression');
+      "Remove 'this' expression");
   static const REMOVE_THIS_EXPRESSION_MULTI = FixKind(
       'dart.fix.remove.thisExpression.multi',
       DartFixKindPriority.IN_FILE,
-      'Remove unnecessary this expressions everywhere in file');
+      "Remove unnecessary 'this' expressions everywhere in file");
   static const REMOVE_TYPE_ANNOTATION = FixKind(
       'dart.fix.remove.typeAnnotation',
       DartFixKindPriority.DEFAULT,
@@ -667,6 +691,14 @@ class DartFixKind {
       'dart.fix.remove.unnecessaryParentheses.multi',
       DartFixKindPriority.IN_FILE,
       'Remove all unnecessary parentheses in file');
+  static const REMOVE_UNNECESSARY_STRING_ESCAPE = FixKind(
+      'dart.fix.remove.unnecessaryStringEscape',
+      DartFixKindPriority.DEFAULT,
+      "Remove unnecessary '\\' in string");
+  static const REMOVE_UNNECESSARY_STRING_ESCAPE_MULTI = FixKind(
+      'dart.fix.remove.unnecessaryStringEscape.multi',
+      DartFixKindPriority.DEFAULT,
+      "Remove unnecessary '\\' in strings in file");
   static const REMOVE_UNNECESSARY_STRING_INTERPOLATION = FixKind(
       'dart.fix.remove.unnecessaryStringInterpolation',
       DartFixKindPriority.DEFAULT,
@@ -839,6 +871,10 @@ class DartFixKind {
       'dart.fix.replace.withNotNullAware',
       DartFixKindPriority.DEFAULT,
       "Replace with '{0}'");
+  static const REPLACE_WITH_NOT_NULL_AWARE_MULTI = FixKind(
+      'dart.fix.replace.withNotNullAware.multi',
+      DartFixKindPriority.IN_FILE,
+      'Replace with non-null-aware operator everywhere in file.');
   static const REPLACE_WITH_NULL_AWARE = FixKind(
       'dart.fix.replace.withNullAware',
       DartFixKindPriority.DEFAULT,
@@ -904,4 +940,5 @@ class DartFixKind {
 class DartFixKindPriority {
   static const int DEFAULT = 50;
   static const int IN_FILE = 40;
+  static const int IGNORE = 30;
 }

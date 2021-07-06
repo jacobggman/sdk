@@ -8,15 +8,13 @@ import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/src/dart/ast/ast.dart' as ast;
 import 'package:analyzer/src/dart/ast/mixin_super_invoked_names.dart';
 import 'package:analyzer/src/dart/element/element.dart';
-import 'package:analyzer/src/dart/element/scope.dart';
+import 'package:analyzer/src/dart/resolver/scope.dart';
 import 'package:analyzer/src/summary2/combinator.dart';
 import 'package:analyzer/src/summary2/constructor_initializer_resolver.dart';
 import 'package:analyzer/src/summary2/default_value_resolver.dart';
 import 'package:analyzer/src/summary2/element_builder.dart';
 import 'package:analyzer/src/summary2/export.dart';
 import 'package:analyzer/src/summary2/link.dart';
-import 'package:analyzer/src/summary2/linked_library_context.dart';
-import 'package:analyzer/src/summary2/linked_unit_context.dart';
 import 'package:analyzer/src/summary2/metadata_resolver.dart';
 import 'package:analyzer/src/summary2/reference.dart';
 import 'package:analyzer/src/summary2/reference_resolver.dart';
@@ -27,12 +25,8 @@ class LibraryBuilder {
   final Linker linker;
   final Uri uri;
   final Reference reference;
-  late final List<Reference> exports;
-
-  late final LinkedLibraryContext context;
-
-  late final LibraryElementImpl element;
-  late final LibraryScope scope;
+  final LibraryElementImpl element;
+  final List<LinkingUnit> units;
 
   /// Local declarations.
   final Scope localScope = Scope.top();
@@ -41,8 +35,15 @@ class LibraryBuilder {
   final Scope exportScope = Scope.top();
 
   final List<Export> exporters = [];
+  late final List<Reference> exports;
 
-  LibraryBuilder._(this.linker, this.uri, this.reference);
+  LibraryBuilder._({
+    required this.linker,
+    required this.uri,
+    required this.reference,
+    required this.element,
+    required this.units,
+  });
 
   void addExporters() {
     for (var element in element.exports) {
@@ -81,100 +82,6 @@ class LibraryBuilder {
     }
   }
 
-  /// Add top-level declaration of the library units to the local scope.
-  void addLocalDeclarations() {
-    for (var linkingUnit in context.units) {
-      var unitRef = reference.getChild('@unit').getChild(linkingUnit.uriStr);
-      var classRef = unitRef.getChild('@class');
-      var extensionRef = unitRef.getChild('@extension');
-      var mixinRef = unitRef.getChild('@mixin');
-      var typeAliasRef = unitRef.getChild('@typeAlias');
-      var nextUnnamedExtensionId = 0;
-      for (var node in linkingUnit.unit.declarations) {
-        if (node is ast.ClassDeclaration) {
-          var name = node.name.name;
-          var reference = classRef.getChild(name);
-          reference.node ??= node;
-          localScope.declare(name, reference);
-
-          ClassElementImpl.forLinkedNode(
-              linkingUnit.reference.element as CompilationUnitElementImpl,
-              reference,
-              node);
-        } else if (node is ast.ClassTypeAlias) {
-          var name = node.name.name;
-          var reference = classRef.getChild(name);
-          reference.node ??= node;
-          localScope.declare(name, reference);
-
-          ClassElementImpl.forLinkedNode(
-              linkingUnit.reference.element as CompilationUnitElementImpl,
-              reference,
-              node);
-        } else if (node is ast.EnumDeclarationImpl) {
-          // Handled in ElementBuilder.
-        } else if (node is ast.ExtensionDeclarationImpl) {
-          var name = node.name?.name;
-          var refName = name ?? 'extension-${nextUnnamedExtensionId++}';
-
-          var reference = extensionRef.getChild(refName);
-          reference.node ??= node;
-
-          if (name != null) {
-            localScope.declare(name, reference);
-          }
-
-          ExtensionElementImpl.forLinkedNode(
-              linkingUnit.reference.element as CompilationUnitElementImpl,
-              reference,
-              node);
-        } else if (node is ast.FunctionDeclarationImpl) {
-          // Handled in ElementBuilder.
-        } else if (node is ast.FunctionTypeAlias) {
-          var name = node.name.name;
-          var reference = typeAliasRef.getChild(name);
-          reference.node ??= node;
-          localScope.declare(name, reference);
-
-          var element = TypeAliasElementImpl.forLinkedNodeFactory(
-              linkingUnit.reference.element as CompilationUnitElementImpl,
-              reference,
-              node);
-          element.isFunctionTypeAliasBased = true;
-        } else if (node is ast.GenericTypeAlias) {
-          var name = node.name.name;
-          var reference = typeAliasRef.getChild(name);
-          reference.node ??= node;
-
-          localScope.declare(name, reference);
-
-          TypeAliasElementImpl.forLinkedNodeFactory(
-              linkingUnit.reference.element as CompilationUnitElementImpl,
-              reference,
-              node);
-        } else if (node is ast.MixinDeclarationImpl) {
-          var name = node.name.name;
-          var reference = mixinRef.getChild(name);
-          reference.node ??= node;
-          localScope.declare(name, reference);
-
-          MixinElementImpl.forLinkedNode(
-              linkingUnit.reference.element as CompilationUnitElementImpl,
-              reference,
-              node);
-        } else if (node is ast.TopLevelVariableDeclaration) {
-          // Handled in ElementBuilder.
-        } else {
-          throw UnimplementedError('${node.runtimeType}');
-        }
-      }
-    }
-    if ('$uri' == 'dart:core') {
-      localScope.declare('dynamic', reference.getChild('dynamic'));
-      localScope.declare('Never', reference.getChild('Never'));
-    }
-  }
-
   /// Return `true` if the export scope was modified.
   bool addToExportScope(String name, Reference reference) {
     if (name.startsWith('_')) return false;
@@ -190,23 +97,23 @@ class LibraryBuilder {
     return true;
   }
 
-  void buildElement() {
-    element = linker.elementFactory.createLibraryElementForLinking(context)
-        as LibraryElementImpl;
-  }
-
+  /// Build elements for declarations in the library units, add top-level
+  /// declarations to the local scope, for combining into export scopes.
   void buildElements() {
-    for (var unitContext in context.units) {
+    for (var linkingUnit in units) {
       var elementBuilder = ElementBuilder(
         libraryBuilder: this,
-        unitReference: unitContext.reference,
-        unitElement: unitContext.element,
+        unitReference: linkingUnit.reference,
+        unitElement: linkingUnit.element,
       );
-      if (unitContext.indexInLibrary == 0) {
-        unitContext.unit.directives.accept(elementBuilder);
-        elementBuilder.setExportsImports();
+      if (linkingUnit.isDefiningUnit) {
+        elementBuilder.buildLibraryElementChildren(linkingUnit.node);
       }
-      elementBuilder.buildDeclarationElements(unitContext.unit);
+      elementBuilder.buildDeclarationElements(linkingUnit.node);
+    }
+    if ('$uri' == 'dart:core') {
+      localScope.declare('dynamic', reference.getChild('dynamic'));
+      localScope.declare('Never', reference.getChild('Never'));
     }
   }
 
@@ -220,13 +127,9 @@ class LibraryBuilder {
     });
   }
 
-  void buildScope() {
-    scope = element.scope as LibraryScope;
-  }
-
   void collectMixinSuperInvokedNames() {
-    for (var unitContext in context.units) {
-      for (var declaration in unitContext.unit.declarations) {
+    for (var linkingUnit in units) {
+      for (var declaration in linkingUnit.node.declarations) {
         if (declaration is ast.MixinDeclaration) {
           var names = <String>{};
           var collector = MixinSuperInvokedNamesCollector(names);
@@ -251,68 +154,146 @@ class LibraryBuilder {
   }
 
   void resolveMetadata() {
-    for (var unit in element.units) {
-      var unitImpl = unit as CompilationUnitElementImpl;
-      var resolver = MetadataResolver(linker, scope, unit);
-      unitImpl.linkedNode!.accept(resolver);
+    for (var linkingUnit in units) {
+      var resolver = MetadataResolver(linker, element, linkingUnit.element);
+      linkingUnit.node.accept(resolver);
     }
   }
 
   void resolveTypes(NodesToBuildType nodesToBuildType) {
-    for (var unitContext in context.units) {
-      var unitRef = reference.getChild('@unit');
-      var unitReference = unitRef.getChild(unitContext.uriStr);
+    for (var linkingUnit in units) {
       var resolver = ReferenceResolver(
         linker,
         nodesToBuildType,
         linker.elementFactory,
         element,
-        unitReference,
-        unitContext.unit.featureSet.isEnabled(Feature.non_nullable),
-        scope,
+        linkingUnit.reference,
+        linkingUnit.node.featureSet.isEnabled(Feature.non_nullable),
       );
-      unitContext.unit.accept(resolver);
+      linkingUnit.node.accept(resolver);
     }
   }
 
   void storeExportScope() {
     exports = exportScope.map.values.toList();
-    linker.elementFactory.linkingExports['$uri'] = exports;
+    linker.elementFactory.setExportsOfLibrary('$uri', exports);
 
-    // TODO(scheglov) store for serialization
-    // for (var reference in exportScope.map.values) {
-    //   var index = linkingBundleContext.indexOfReference(reference);
-    //   context.exports.add(index);
-    // }
+    var definedNames = <String, Element>{};
+    for (var entry in exportScope.map.entries) {
+      var element = linker.elementFactory.elementOfReference(entry.value);
+      if (element != null) {
+        definedNames[entry.key] = element;
+      }
+    }
+
+    var namespace = Namespace(definedNames);
+    element.exportNamespace = namespace;
+
+    var entryPoint = namespace.get(FunctionElement.MAIN_FUNCTION_NAME);
+    if (entryPoint is FunctionElement) {
+      element.entryPoint = entryPoint;
+    }
   }
 
   static void build(Linker linker, LinkInputLibrary inputLibrary) {
-    var uriStr = inputLibrary.uriStr;
-    var reference = linker.rootReference.getChild(uriStr);
-
     var elementFactory = linker.elementFactory;
-    var context = LinkedLibraryContext(elementFactory, uriStr, reference);
 
-    var unitRef = reference.getChild('@unit');
-    var unitIndex = 0;
-    for (var inputUnit in inputLibrary.units) {
-      var uriStr = inputUnit.uriStr;
-      var reference = unitRef.getChild(uriStr);
-      context.units.add(
-        LinkedUnitContext(
-          context,
-          unitIndex++,
-          inputUnit.partUriStr,
-          uriStr,
-          reference,
-          inputUnit.isSynthetic,
-          unit: inputUnit.unit,
-        ),
-      );
+    var rootReference = linker.rootReference;
+    var libraryUriStr = inputLibrary.uriStr;
+    var libraryReference = rootReference.getChild(libraryUriStr);
+
+    var definingUnit = inputLibrary.units[0];
+    var definingUnitNode = definingUnit.unit as ast.CompilationUnitImpl;
+
+    var name = '';
+    var nameOffset = -1;
+    var nameLength = 0;
+    for (var directive in definingUnitNode.directives) {
+      if (directive is ast.LibraryDirective) {
+        name = directive.name.components.map((e) => e.name).join('.');
+        nameOffset = directive.name.offset;
+        nameLength = directive.name.length;
+        break;
+      }
     }
 
-    var builder = LibraryBuilder._(linker, inputLibrary.uri, reference);
+    var libraryElement = LibraryElementImpl(
+      elementFactory.analysisContext,
+      elementFactory.analysisSession,
+      name,
+      nameOffset,
+      nameLength,
+      definingUnitNode.featureSet,
+    );
+    libraryElement.isSynthetic = definingUnit.isSynthetic;
+    libraryElement.languageVersion = definingUnitNode.languageVersion!;
+    _bindReference(libraryReference, libraryElement);
+    elementFactory.setLibraryTypeSystem(libraryElement);
+
+    var unitContainerRef = libraryReference.getChild('@unit');
+    var unitElements = <CompilationUnitElementImpl>[];
+    var isDefiningUnit = true;
+    var linkingUnits = <LinkingUnit>[];
+    for (var inputUnit in inputLibrary.units) {
+      var unitNode = inputUnit.unit as ast.CompilationUnitImpl;
+
+      var unitElement = CompilationUnitElementImpl();
+      unitElement.isSynthetic = inputUnit.isSynthetic;
+      unitElement.librarySource = inputLibrary.source;
+      unitElement.lineInfo = unitNode.lineInfo;
+      unitElement.source = inputUnit.source;
+      unitElement.sourceContent = inputUnit.sourceContent;
+      unitElement.uri = inputUnit.partUriStr;
+      unitElement.setCodeRange(0, unitNode.length);
+
+      var unitReference = unitContainerRef.getChild(inputUnit.uriStr);
+      _bindReference(unitReference, unitElement);
+
+      unitElements.add(unitElement);
+      linkingUnits.add(
+        LinkingUnit(
+          input: inputUnit,
+          isDefiningUnit: isDefiningUnit,
+          reference: unitReference,
+          node: unitNode,
+          element: unitElement,
+        ),
+      );
+      isDefiningUnit = false;
+    }
+
+    libraryElement.definingCompilationUnit = unitElements[0];
+    libraryElement.parts = unitElements.skip(1).toList();
+
+    var builder = LibraryBuilder._(
+      linker: linker,
+      uri: inputLibrary.uri,
+      reference: libraryReference,
+      element: libraryElement,
+      units: linkingUnits,
+    );
+
     linker.builders[builder.uri] = builder;
-    builder.context = context;
   }
+
+  static void _bindReference(Reference reference, ElementImpl element) {
+    reference.element = element;
+    element.reference = reference;
+  }
+}
+
+class LinkingUnit {
+  final LinkInputUnit input;
+  final bool isDefiningUnit;
+  final Reference reference;
+  final ast.CompilationUnitImpl node;
+  final CompilationUnitElementImpl element;
+
+  LinkingUnit({
+    required this.input,
+    required this.isDefiningUnit,
+    required this.reference,
+    required this.node,
+    required this.element,
+  });
 }

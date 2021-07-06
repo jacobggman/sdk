@@ -12,9 +12,12 @@ import 'add_diagnostic_property_reference_test.dart'
     as add_diagnostic_property_reference;
 import 'add_explicit_cast_test.dart' as add_explicit_cast;
 import 'add_field_formal_parameters_test.dart' as add_field_formal_parameters;
+import 'add_key_to_constructors_test.dart' as add_key_to_constructors;
 import 'add_late_test.dart' as add_late;
 import 'add_missing_enum_case_clauses_test.dart'
     as add_missing_enum_case_clauses;
+import 'add_missing_enum_like_case_clauses_test.dart'
+    as add_missing_enum_like_case_clauses;
 import 'add_missing_parameter_named_test.dart' as add_missing_parameter_named;
 import 'add_missing_parameter_positional_test.dart'
     as add_missing_parameter_positional;
@@ -32,7 +35,7 @@ import 'add_super_constructor_invocation_test.dart'
     as add_super_constructor_invocation;
 import 'add_type_annotation_test.dart' as add_type_annotation;
 import 'analysis_options/test_all.dart' as analysis_options;
-import 'bulk/test_all.dart' as bulk;
+import 'bulk_fix_processor_test.dart' as bulk_fix_processor;
 import 'change_argument_name_test.dart' as change_argument_name;
 import 'change_to_nearest_precise_value_test.dart'
     as change_to_nearest_precise_value;
@@ -45,6 +48,7 @@ import 'convert_flutter_child_test.dart' as convert_flutter_child;
 import 'convert_flutter_children_test.dart' as convert_flutter_children;
 import 'convert_for_each_to_for_loop_test.dart' as convert_for_each_to_for_loop;
 import 'convert_into_expression_body_test.dart' as convert_into_expression_body;
+import 'convert_into_is_not_test.dart' as convert_into_is_not;
 import 'convert_to_contains_test.dart' as convert_to_contains;
 import 'convert_to_for_element_test.dart' as convert_to_for_element;
 import 'convert_to_generic_function_syntax_test.dart'
@@ -83,7 +87,9 @@ import 'create_setter_test.dart' as create_setter;
 import 'data_driven/test_all.dart' as data_driven;
 import 'extend_class_for_mixin_test.dart' as extend_class_for_mixin;
 import 'fix_in_file_test.dart' as fix_in_file;
+import 'fix_processor_map_test.dart' as fix_processor_map;
 import 'fix_test.dart' as fix;
+import 'ignore_diagnostic_test.dart' as ignore_error;
 import 'import_async_test.dart' as import_async;
 import 'import_library_prefix_test.dart' as import_library_prefix;
 import 'import_library_project_test.dart' as import_library_project;
@@ -125,6 +131,7 @@ import 'remove_parameters_in_getter_declaration_test.dart'
 import 'remove_parentheses_in_getter_invocation_test.dart'
     as remove_parentheses_in_getter_invocation;
 import 'remove_question_mark_test.dart' as remove_question_mark;
+import 'remove_returned_value_test.dart' as remove_returned_value;
 import 'remove_this_expression_test.dart' as remove_this_expression;
 import 'remove_type_annotation_test.dart' as remove_type_annotation;
 import 'remove_type_arguments_test.dart' as remove_type_arguments;
@@ -133,6 +140,8 @@ import 'remove_unnecessary_const_test.dart' as remove_unnecessary_const;
 import 'remove_unnecessary_new_test.dart' as remove_unnecessary_new;
 import 'remove_unnecessary_parentheses_test.dart'
     as remove_unnecessary_parentheses;
+import 'remove_unnecessary_string_escapes_test.dart'
+    as remove_unnecessary_string_escapes;
 import 'remove_unnecessary_string_interpolation_test.dart'
     as remove_unnecessary_string_interpolation;
 import 'remove_unused_catch_clause_test.dart' as remove_unused_catch_clause;
@@ -170,6 +179,7 @@ import 'replace_with_var_test.dart' as replace_with_var;
 import 'sort_child_property_last_test.dart' as sort_properties_last;
 import 'update_sdk_constraints_test.dart' as update_sdk_constraints;
 import 'use_const_test.dart' as use_const;
+import 'use_curly_braces_test.dart' as use_curly_braces;
 import 'use_effective_integer_division_test.dart'
     as use_effective_integer_division;
 import 'use_eq_eq_null_test.dart' as use_eq_eq_null;
@@ -188,8 +198,10 @@ void main() {
     add_diagnostic_property_reference.main();
     add_explicit_cast.main();
     add_field_formal_parameters.main();
+    add_key_to_constructors.main();
     add_late.main();
     add_missing_enum_case_clauses.main();
+    add_missing_enum_like_case_clauses.main();
     add_missing_parameter_named.main();
     add_missing_parameter_positional.main();
     add_missing_parameter_required.main();
@@ -203,7 +215,7 @@ void main() {
     add_super_constructor_invocation.main();
     add_type_annotation.main();
     analysis_options.main();
-    bulk.main();
+    bulk_fix_processor.main();
     change_argument_name.main();
     change_to.main();
     change_to_nearest_precise_value.main();
@@ -214,6 +226,7 @@ void main() {
     convert_flutter_children.main();
     convert_for_each_to_for_loop.main();
     convert_into_expression_body.main();
+    convert_into_is_not.main();
     convert_to_contains.main();
     convert_to_for_element.main();
     convert_to_generic_function_syntax.main();
@@ -250,6 +263,8 @@ void main() {
     extend_class_for_mixin.main();
     fix.main();
     fix_in_file.main();
+    fix_processor_map.main();
+    ignore_error.main();
     import_async.main();
     import_library_prefix.main();
     import_library_project.main();
@@ -288,6 +303,7 @@ void main() {
     remove_parameters_in_getter_declaration.main();
     remove_parentheses_in_getter_invocation.main();
     remove_question_mark.main();
+    remove_returned_value.main();
     remove_this_expression.main();
     remove_type_annotation.main();
     remove_type_arguments.main();
@@ -295,6 +311,7 @@ void main() {
     remove_unnecessary_const.main();
     remove_unnecessary_new.main();
     remove_unnecessary_parentheses.main();
+    remove_unnecessary_string_escapes.main();
     remove_unnecessary_string_interpolation.main();
     remove_unused_catch_clause.main();
     remove_unused_catch_stack.main();
@@ -330,6 +347,7 @@ void main() {
     sort_properties_last.main();
     update_sdk_constraints.main();
     use_const.main();
+    use_curly_braces.main();
     use_effective_integer_division.main();
     use_eq_eq_null.main();
     use_is_not_empty.main();

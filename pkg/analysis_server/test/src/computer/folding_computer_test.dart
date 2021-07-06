@@ -68,7 +68,7 @@ class MyClass2 {/*4:INC*/
   @setterAnnotation1/*7:INC*/
   @setterAnnotation2/*7:EXC:ANNOTATIONS*/
   void set myThing(int value) {}
-  
+
   @methodAnnotation1/*8:INC*/
   @methodAnnotation2/*8:EXC:ANNOTATIONS*/
   void myMethod() {}
@@ -492,6 +492,31 @@ main() {/*1:INC*/
 // Content after
 ''';
 
+    final regions = await _computeRegions(content);
+    _compareRegions(regions, content);
+  }
+
+  Future<void> test_parameters_function() async {
+    var content = '''
+foo(/*1:INC*/
+  String aaaaa,
+  String bbbbb, {
+  String ccccc,
+  }/*1:INC:PARAMETERS*/) {}
+''';
+    final regions = await _computeRegions(content);
+    _compareRegions(regions, content);
+  }
+
+  Future<void> test_parameters_method() async {
+    var content = '''
+class C {/*1:INC*/
+  C(/*2:INC*/
+    String aaaaa,
+    String bbbbb,
+  /*2:INC:PARAMETERS*/) : super();
+/*1:INC:CLASS_BODY*/}
+''';
     final regions = await _computeRegions(content);
     _compareRegions(regions, content);
   }

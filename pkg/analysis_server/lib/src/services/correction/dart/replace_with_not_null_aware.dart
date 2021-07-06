@@ -15,10 +15,19 @@ class ReplaceWithNotNullAware extends CorrectionProducer {
   String _newOperator = '';
 
   @override
+  bool get canBeAppliedInBulk => true;
+
+  @override
+  bool get canBeAppliedToFile => true;
+
+  @override
   List<Object> get fixArguments => [_newOperator];
 
   @override
   FixKind get fixKind => DartFixKind.REPLACE_WITH_NOT_NULL_AWARE;
+
+  @override
+  FixKind get multiFixKind => DartFixKind.REPLACE_WITH_NOT_NULL_AWARE_MULTI;
 
   @override
   Future<void> compute(ChangeBuilder builder) async {

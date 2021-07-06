@@ -597,17 +597,21 @@ void ClosureCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
       Array::ZoneHandle(Z, GetArgumentsDescriptor());
   __ LoadObject(R4, arguments_descriptor);
 
-  // R4: Arguments descriptor.
-  // R0: Function.
   ASSERT(locs()->in(0).reg() == R0);
-  if (!FLAG_precompiled_mode || !FLAG_use_bare_instructions) {
+  if (FLAG_precompiled_mode && FLAG_use_bare_instructions) {
+    // R0: Closure with a cached entry point.
+    __ ldr(R2, compiler::FieldAddress(
+                   R0, compiler::target::Closure::entry_point_offset()));
+  } else {
+    // R0: Function.
     __ ldr(CODE_REG, compiler::FieldAddress(
                          R0, compiler::target::Function::code_offset()));
+    // Closure functions only have one entry point.
+    __ ldr(R2, compiler::FieldAddress(
+                   R0, compiler::target::Function::entry_point_offset()));
   }
-  __ ldr(R2,
-         compiler::FieldAddress(
-             R0, compiler::target::Function::entry_point_offset(entry_kind())));
 
+  // R4: Arguments descriptor array.
   // R2: instructions entry point.
   if (!FLAG_precompiled_mode) {
     // R9: Smi 0 (no IC data; the lazy-compile stub expects a GC-safe value).
@@ -615,7 +619,7 @@ void ClosureCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
   }
   __ blx(R2);
   compiler->EmitCallsiteMetadata(source(), deopt_id(),
-                                 UntaggedPcDescriptors::kOther, locs());
+                                 UntaggedPcDescriptors::kOther, locs(), env());
   __ Drop(argument_count);
 }
 
@@ -853,6 +857,26 @@ static Condition TokenKindToIntCondition(Token::Kind kind) {
   }
 }
 
+static bool CanBePairOfImmediateOperands(const dart::Object& constant,
+                                         compiler::Operand* low,
+                                         compiler::Operand* high) {
+  int64_t imm;
+  if (!compiler::HasIntegerValue(constant, &imm)) {
+    return false;
+  }
+  return compiler::Operand::CanHold(Utils::Low32Bits(imm), low) &&
+         compiler::Operand::CanHold(Utils::High32Bits(imm), high);
+}
+
+static bool CanBePairOfImmediateOperands(Value* value,
+                                         compiler::Operand* low,
+                                         compiler::Operand* high) {
+  if (!value->BindsToConstant()) {
+    return false;
+  }
+  return CanBePairOfImmediateOperands(value->BoundConstant(), low, high);
+}
+
 LocationSummary* EqualityCompareInstr::MakeLocationSummary(Zone* zone,
                                                            bool opt) const {
   const intptr_t kNumInputs = 2;
@@ -867,13 +891,24 @@ LocationSummary* EqualityCompareInstr::MakeLocationSummary(Zone* zone,
     return locs;
   }
   if (operation_cid() == kMintCid) {
+    compiler::Operand o;
     const intptr_t kNumTemps = 0;
     LocationSummary* locs = new (zone)
         LocationSummary(zone, kNumInputs, kNumTemps, LocationSummary::kNoCall);
-    locs->set_in(0, Location::Pair(Location::RequiresRegister(),
-                                   Location::RequiresRegister()));
-    locs->set_in(1, Location::Pair(Location::RequiresRegister(),
-                                   Location::RequiresRegister()));
+    if (CanBePairOfImmediateOperands(left(), &o, &o)) {
+      locs->set_in(0, Location::Constant(left()->definition()->AsConstant()));
+      locs->set_in(1, Location::Pair(Location::RequiresRegister(),
+                                     Location::RequiresRegister()));
+    } else if (CanBePairOfImmediateOperands(right(), &o, &o)) {
+      locs->set_in(0, Location::Pair(Location::RequiresRegister(),
+                                     Location::RequiresRegister()));
+      locs->set_in(1, Location::Constant(right()->definition()->AsConstant()));
+    } else {
+      locs->set_in(0, Location::Pair(Location::RequiresRegister(),
+                                     Location::RequiresRegister()));
+      locs->set_in(1, Location::Pair(Location::RequiresRegister(),
+                                     Location::RequiresRegister()));
+    }
     locs->set_out(0, Location::RequiresRegister());
     return locs;
   }
@@ -989,17 +1024,31 @@ static Condition EmitUnboxedMintEqualityOp(FlowGraphCompiler* compiler,
                                            LocationSummary* locs,
                                            Token::Kind kind) {
   ASSERT(Token::IsEqualityOperator(kind));
-  PairLocation* left_pair = locs->in(0).AsPairLocation();
+  PairLocation* left_pair;
+  compiler::Operand right_lo, right_hi;
+  if (locs->in(0).IsConstant()) {
+    const bool ok = CanBePairOfImmediateOperands(locs->in(0).constant(),
+                                                 &right_lo, &right_hi);
+    RELEASE_ASSERT(ok);
+    left_pair = locs->in(1).AsPairLocation();
+  } else if (locs->in(1).IsConstant()) {
+    const bool ok = CanBePairOfImmediateOperands(locs->in(1).constant(),
+                                                 &right_lo, &right_hi);
+    RELEASE_ASSERT(ok);
+    left_pair = locs->in(0).AsPairLocation();
+  } else {
+    left_pair = locs->in(0).AsPairLocation();
+    PairLocation* right_pair = locs->in(1).AsPairLocation();
+    right_lo = compiler::Operand(right_pair->At(0).reg());
+    right_hi = compiler::Operand(right_pair->At(1).reg());
+  }
   Register left_lo = left_pair->At(0).reg();
   Register left_hi = left_pair->At(1).reg();
-  PairLocation* right_pair = locs->in(1).AsPairLocation();
-  Register right_lo = right_pair->At(0).reg();
-  Register right_hi = right_pair->At(1).reg();
 
   // Compare lower.
-  __ cmp(left_lo, compiler::Operand(right_lo));
+  __ cmp(left_lo, right_lo);
   // Compare upper if lower is equal.
-  __ cmp(left_hi, compiler::Operand(right_hi), EQ);
+  __ cmp(left_hi, right_hi, EQ);
   return TokenKindToIntCondition(kind);
 }
 
@@ -1007,29 +1056,45 @@ static Condition EmitUnboxedMintComparisonOp(FlowGraphCompiler* compiler,
                                              LocationSummary* locs,
                                              Token::Kind kind,
                                              BranchLabels labels) {
-  PairLocation* left_pair = locs->in(0).AsPairLocation();
+  PairLocation* left_pair;
+  compiler::Operand right_lo, right_hi;
+  Condition true_condition = TokenKindToIntCondition(kind);
+  if (locs->in(0).IsConstant()) {
+    const bool ok = CanBePairOfImmediateOperands(locs->in(0).constant(),
+                                                 &right_lo, &right_hi);
+    RELEASE_ASSERT(ok);
+    left_pair = locs->in(1).AsPairLocation();
+    true_condition = FlipCondition(true_condition);
+  } else if (locs->in(1).IsConstant()) {
+    const bool ok = CanBePairOfImmediateOperands(locs->in(1).constant(),
+                                                 &right_lo, &right_hi);
+    RELEASE_ASSERT(ok);
+    left_pair = locs->in(0).AsPairLocation();
+  } else {
+    left_pair = locs->in(0).AsPairLocation();
+    PairLocation* right_pair = locs->in(1).AsPairLocation();
+    right_lo = compiler::Operand(right_pair->At(0).reg());
+    right_hi = compiler::Operand(right_pair->At(1).reg());
+  }
   Register left_lo = left_pair->At(0).reg();
   Register left_hi = left_pair->At(1).reg();
-  PairLocation* right_pair = locs->in(1).AsPairLocation();
-  Register right_lo = right_pair->At(0).reg();
-  Register right_hi = right_pair->At(1).reg();
 
   // 64-bit comparison.
   Condition hi_cond, lo_cond;
-  switch (kind) {
-    case Token::kLT:
+  switch (true_condition) {
+    case LT:
       hi_cond = LT;
       lo_cond = CC;
       break;
-    case Token::kGT:
+    case GT:
       hi_cond = GT;
       lo_cond = HI;
       break;
-    case Token::kLTE:
+    case LE:
       hi_cond = LT;
       lo_cond = LS;
       break;
-    case Token::kGTE:
+    case GE:
       hi_cond = GT;
       lo_cond = CS;
       break;
@@ -1038,12 +1103,12 @@ static Condition EmitUnboxedMintComparisonOp(FlowGraphCompiler* compiler,
       hi_cond = lo_cond = VS;
   }
   // Compare upper halves first.
-  __ cmp(left_hi, compiler::Operand(right_hi));
+  __ cmp(left_hi, right_hi);
   __ b(labels.true_label, hi_cond);
   __ b(labels.false_label, FlipCondition(hi_cond));
 
   // If higher words are equal, compare lower words.
-  __ cmp(left_lo, compiler::Operand(right_lo));
+  __ cmp(left_lo, right_lo);
   return lo_cond;
 }
 
@@ -1229,13 +1294,24 @@ LocationSummary* RelationalOpInstr::MakeLocationSummary(Zone* zone,
   const intptr_t kNumInputs = 2;
   const intptr_t kNumTemps = 0;
   if (operation_cid() == kMintCid) {
+    compiler::Operand o;
     const intptr_t kNumTemps = 0;
     LocationSummary* locs = new (zone)
         LocationSummary(zone, kNumInputs, kNumTemps, LocationSummary::kNoCall);
-    locs->set_in(0, Location::Pair(Location::RequiresRegister(),
-                                   Location::RequiresRegister()));
-    locs->set_in(1, Location::Pair(Location::RequiresRegister(),
-                                   Location::RequiresRegister()));
+    if (CanBePairOfImmediateOperands(left(), &o, &o)) {
+      locs->set_in(0, Location::Constant(left()->definition()->AsConstant()));
+      locs->set_in(1, Location::Pair(Location::RequiresRegister(),
+                                     Location::RequiresRegister()));
+    } else if (CanBePairOfImmediateOperands(right(), &o, &o)) {
+      locs->set_in(0, Location::Pair(Location::RequiresRegister(),
+                                     Location::RequiresRegister()));
+      locs->set_in(1, Location::Constant(right()->definition()->AsConstant()));
+    } else {
+      locs->set_in(0, Location::Pair(Location::RequiresRegister(),
+                                     Location::RequiresRegister()));
+      locs->set_in(1, Location::Pair(Location::RequiresRegister(),
+                                     Location::RequiresRegister()));
+    }
     locs->set_out(0, Location::RequiresRegister());
     return locs;
   }
@@ -1326,84 +1402,114 @@ void NativeCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
   __ Drop(ArgumentCount());  // Drop the arguments.
 }
 
+LocationSummary* FfiCallInstr::MakeLocationSummary(Zone* zone,
+                                                   bool is_optimizing) const {
+  return MakeLocationSummaryInternal(zone, is_optimizing, R0);
+}
+
 void FfiCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
-  const Register saved_fp = locs()->temp(0).reg();
-  const Register temp = locs()->temp(1).reg();
+  // For regular calls, this holds the FP for rebasing the original locations
+  // during EmitParamMoves.
+  // For leaf calls, this holds the SP used to restore the pre-aligned SP after
+  // the call.
+  const Register saved_fp_or_sp = locs()->temp(0).reg();
+  RELEASE_ASSERT((CallingConventions::kCalleeSaveCpuRegisters &
+                  (1 << saved_fp_or_sp)) != 0);
+  const Register temp1 = locs()->temp(1).reg();
+  const Register temp2 = locs()->temp(2).reg();
   const Register branch = locs()->in(TargetAddressIndex()).reg();
 
-  // Save frame pointer because we're going to update it when we enter the exit
-  // frame.
-  __ mov(saved_fp, compiler::Operand(FPREG));
+  // Ensure these are callee-saved register and are preserved across the call.
+  ASSERT((CallingConventions::kCalleeSaveCpuRegisters &
+          (1 << saved_fp_or_sp)) != 0);
+  // temp doesn't need to be preserved.
 
-  // Make a space to put the return address.
-  __ PushImmediate(0);
+  __ mov(saved_fp_or_sp,
+         is_leaf_ ? compiler::Operand(SPREG) : compiler::Operand(FPREG));
 
-  // We need to create a dummy "exit frame". It will have a null code object.
-  __ LoadObject(CODE_REG, Object::null_object());
-  __ set_constant_pool_allowed(false);
-  __ EnterDartFrame(0, /*load_pool_pointer=*/false);
+  if (!is_leaf_) {
+    // Make a space to put the return address.
+    __ PushImmediate(0);
 
-  // Reserve space for arguments and align frame before entering C++ world.
+    // We need to create a dummy "exit frame". It will have a null code object.
+    __ LoadObject(CODE_REG, Object::null_object());
+    __ set_constant_pool_allowed(false);
+    __ EnterDartFrame(0, /*load_pool_pointer=*/false);
+  }
+
+  // Reserve space for the arguments that go on the stack (if any), then align.
   __ ReserveAlignedFrameSpace(marshaller_.RequiredStackSpaceInBytes());
 
-  EmitParamMoves(compiler);
+  EmitParamMoves(compiler, is_leaf_ ? FPREG : saved_fp_or_sp, temp1);
 
   if (compiler::Assembler::EmittingComments()) {
-    __ Comment("Call");
+    __ Comment(is_leaf_ ? "Leaf Call" : "Call");
   }
-  // We need to copy the return address up into the dummy stack frame so the
-  // stack walker will know which safepoint to use.
-  __ mov(TMP, compiler::Operand(PC));
-  __ str(TMP, compiler::Address(FPREG, kSavedCallerPcSlotFromFp *
-                                           compiler::target::kWordSize));
 
-  // For historical reasons, the PC on ARM points 8 bytes past the current
-  // instruction. Therefore we emit the metadata here, 8 bytes (2 instructions)
-  // after the original mov.
-  compiler->EmitCallsiteMetadata(InstructionSource(), deopt_id(),
-                                 UntaggedPcDescriptors::Kind::kOther, locs());
-
-  // Update information in the thread object and enter a safepoint.
-  if (CanExecuteGeneratedCodeInSafepoint()) {
-    __ LoadImmediate(temp, compiler::target::Thread::exit_through_ffi());
-    __ TransitionGeneratedToNative(branch, FPREG, temp, saved_fp,
-                                   /*enter_safepoint=*/true);
-
+  if (is_leaf_) {
     __ blx(branch);
-
-    // Update information in the thread object and leave the safepoint.
-    __ TransitionNativeToGenerated(saved_fp, temp, /*leave_safepoint=*/true);
   } else {
-    // We cannot trust that this code will be executable within a safepoint.
-    // Therefore we delegate the responsibility of entering/exiting the
-    // safepoint to a stub which in the VM isolate's heap, which will never lose
-    // execute permission.
-    __ ldr(TMP,
-           compiler::Address(
-               THR, compiler::target::Thread::
-                        call_native_through_safepoint_entry_point_offset()));
+    // We need to copy the return address up into the dummy stack frame so the
+    // stack walker will know which safepoint to use.
+    __ mov(temp1, compiler::Operand(PC));
+    __ str(temp1, compiler::Address(FPREG, kSavedCallerPcSlotFromFp *
+                                               compiler::target::kWordSize));
 
-    // Calls R8 in a safepoint and clobbers R4 and NOTFP.
-    ASSERT(branch == R8 && temp == R4);
-    static_assert((kReservedCpuRegisters & (1 << NOTFP)) != 0,
-                  "NOTFP should be a reserved register");
-    __ blx(TMP);
+    // For historical reasons, the PC on ARM points 8 bytes past the current
+    // instruction. Therefore we emit the metadata here, 8 bytes
+    // (2 instructions) after the original mov.
+    compiler->EmitCallsiteMetadata(InstructionSource(), deopt_id(),
+                                   UntaggedPcDescriptors::Kind::kOther, locs(),
+                                   env());
+
+    // Update information in the thread object and enter a safepoint.
+    if (CanExecuteGeneratedCodeInSafepoint()) {
+      __ LoadImmediate(temp1, compiler::target::Thread::exit_through_ffi());
+      __ TransitionGeneratedToNative(branch, FPREG, temp1, saved_fp_or_sp,
+                                     /*enter_safepoint=*/true);
+
+      __ blx(branch);
+
+      // Update information in the thread object and leave the safepoint.
+      __ TransitionNativeToGenerated(saved_fp_or_sp, temp1,
+                                     /*leave_safepoint=*/true);
+    } else {
+      // We cannot trust that this code will be executable within a safepoint.
+      // Therefore we delegate the responsibility of entering/exiting the
+      // safepoint to a stub which in the VM isolate's heap, which will never
+      // lose execute permission.
+      __ ldr(temp1,
+             compiler::Address(
+                 THR, compiler::target::Thread::
+                          call_native_through_safepoint_entry_point_offset()));
+
+      // Calls R8 in a safepoint and clobbers R4 and NOTFP.
+      ASSERT(branch == R8);
+      static_assert((kReservedCpuRegisters & (1 << NOTFP)) != 0,
+                    "NOTFP should be a reserved register");
+      __ blx(temp1);
+    }
+
+    // Restore the global object pool after returning from runtime (old space is
+    // moving, so the GOP could have been relocated).
+    if (FLAG_precompiled_mode && FLAG_use_bare_instructions) {
+      __ SetupGlobalPoolAndDispatchTable();
+    }
   }
 
-  // Restore the global object pool after returning from runtime (old space is
-  // moving, so the GOP could have been relocated).
-  if (FLAG_precompiled_mode && FLAG_use_bare_instructions) {
-    __ SetupGlobalPoolAndDispatchTable();
+  EmitReturnMoves(compiler, temp1, temp2);
+
+  if (is_leaf_) {
+    // Restore the pre-aligned SP.
+    __ mov(SPREG, compiler::Operand(saved_fp_or_sp));
+  } else {
+    // Leave dummy exit frame.
+    __ LeaveDartFrame();
+    __ set_constant_pool_allowed(true);
+
+    // Instead of returning to the "fake" return address, we just pop it.
+    __ PopRegister(temp1);
   }
-
-  EmitReturnMoves(compiler);
-
-  // Leave dummy exit frame.
-  __ LeaveDartFrame();
-  __ set_constant_pool_allowed(true);
-
-  // Instead of returning to the "fake" return address, we just pop it.
-  __ PopRegister(TMP);
 }
 
 // Keep in sync with NativeEntryInstr::EmitNativeCode.
@@ -1438,7 +1544,7 @@ void NativeReturnInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
 
   __ PopNativeCalleeSavedRegisters();
 
-#if defined(TARGET_OS_FUCHSIA) && defined(USING_SHADOW_CALL_STACK)
+#if defined(DART_TARGET_OS_FUCHSIA) && defined(USING_SHADOW_CALL_STACK)
 #error Unimplemented
 #endif
 
@@ -1474,7 +1580,7 @@ void NativeEntryInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
   // Save a space for the code object.
   __ PushImmediate(0);
 
-#if defined(TARGET_OS_FUCHSIA) && defined(USING_SHADOW_CALL_STACK)
+#if defined(DART_TARGET_OS_FUCHSIA) && defined(USING_SHADOW_CALL_STACK)
 #error Unimplemented
 #endif
 
@@ -1619,31 +1725,6 @@ void StringToCharCodeInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
               str, compiler::target::OneByteString::data_offset()),
           EQ);
   __ SmiTag(result);
-}
-
-LocationSummary* StringInterpolateInstr::MakeLocationSummary(Zone* zone,
-                                                             bool opt) const {
-  const intptr_t kNumInputs = 1;
-  const intptr_t kNumTemps = 0;
-  LocationSummary* summary = new (zone)
-      LocationSummary(zone, kNumInputs, kNumTemps, LocationSummary::kCall);
-  summary->set_in(0, Location::RegisterLocation(R0));
-  summary->set_out(0, Location::RegisterLocation(R0));
-  return summary;
-}
-
-void StringInterpolateInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
-  const Register array = locs()->in(0).reg();
-  __ Push(array);
-  const int kTypeArgsLen = 0;
-  const int kNumberOfArguments = 1;
-  constexpr int kSizeOfArguments = 1;
-  const Array& kNoArgumentNames = Object::null_array();
-  ArgumentsInfo args_info(kTypeArgsLen, kNumberOfArguments, kSizeOfArguments,
-                          kNoArgumentNames);
-  compiler->GenerateStaticCall(deopt_id(), source(), CallFunction(), args_info,
-                               locs(), ICData::Handle(), ICData::kStatic);
-  ASSERT(locs()->out(0).reg() == R0);
 }
 
 LocationSummary* Utf8ScanInstr::MakeLocationSummary(Zone* zone,
@@ -3008,9 +3089,11 @@ LocationSummary* CreateArrayInstr::MakeLocationSummary(Zone* zone,
   const intptr_t kNumTemps = 0;
   LocationSummary* locs = new (zone)
       LocationSummary(zone, kNumInputs, kNumTemps, LocationSummary::kCall);
-  locs->set_in(kElementTypePos, Location::RegisterLocation(R1));
-  locs->set_in(kLengthPos, Location::RegisterLocation(R2));
-  locs->set_out(0, Location::RegisterLocation(R0));
+  locs->set_in(kTypeArgumentsPos,
+               Location::RegisterLocation(AllocateArrayABI::kTypeArgumentsReg));
+  locs->set_in(kLengthPos,
+               Location::RegisterLocation(AllocateArrayABI::kLengthReg));
+  locs->set_out(0, Location::RegisterLocation(AllocateArrayABI::kResultReg));
   return locs;
 }
 
@@ -3020,31 +3103,31 @@ static void InlineArrayAllocation(FlowGraphCompiler* compiler,
                                   compiler::Label* slow_path,
                                   compiler::Label* done) {
   const int kInlineArraySize = 12;  // Same as kInlineInstanceSize.
-  const Register kLengthReg = R2;
-  const Register kElemTypeReg = R1;
   const intptr_t instance_size = Array::InstanceSize(num_elements);
 
   __ TryAllocateArray(kArrayCid, instance_size, slow_path,
-                      R0,  // instance
-                      R3,  // end address
+                      AllocateArrayABI::kResultReg,  // instance
+                      R3,                            // end address
                       R8, R6);
-  // R0: new object start as a tagged pointer.
+  // AllocateArrayABI::kResultReg: new object start as a tagged pointer.
   // R3: new object end address.
 
   // Store the type argument field.
   __ StoreIntoObjectNoBarrier(
-      R0,
-      compiler::FieldAddress(R0,
+      AllocateArrayABI::kResultReg,
+      compiler::FieldAddress(AllocateArrayABI::kResultReg,
                              compiler::target::Array::type_arguments_offset()),
-      kElemTypeReg);
+      AllocateArrayABI::kTypeArgumentsReg);
 
   // Set the length field.
   __ StoreIntoObjectNoBarrier(
-      R0, compiler::FieldAddress(R0, compiler::target::Array::length_offset()),
-      kLengthReg);
+      AllocateArrayABI::kResultReg,
+      compiler::FieldAddress(AllocateArrayABI::kResultReg,
+                             compiler::target::Array::length_offset()),
+      AllocateArrayABI::kLengthReg);
 
   // Initialize all array elements to raw_null.
-  // R0: new object start as a tagged pointer.
+  // AllocateArrayABI::kResultReg: new object start as a tagged pointer.
   // R3: new object end address.
   // R6: iterator which initially points to the start of the variable
   // data area to be initialized.
@@ -3060,12 +3143,15 @@ static void InlineArrayAllocation(FlowGraphCompiler* compiler,
       __ LoadImmediate(R9, 0x1);
 #endif  // DEBUG
     }
-    __ AddImmediate(R6, R0, sizeof(UntaggedArray) - kHeapObjectTag);
+    __ AddImmediate(R6, AllocateArrayABI::kResultReg,
+                    sizeof(UntaggedArray) - kHeapObjectTag);
     if (array_size < (kInlineArraySize * compiler::target::kWordSize)) {
       __ InitializeFieldsNoBarrierUnrolled(
-          R0, R6, 0, num_elements * compiler::target::kWordSize, R8, R9);
+          AllocateArrayABI::kResultReg, R6, 0,
+          num_elements * compiler::target::kWordSize, R8, R9);
     } else {
-      __ InitializeFieldsNoBarrier(R0, R6, R3, R8, R9);
+      __ InitializeFieldsNoBarrier(AllocateArrayABI::kResultReg, R6, R3, R8,
+                                   R9);
     }
   }
   __ b(done);
@@ -3077,15 +3163,8 @@ void CreateArrayInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
     const Class& list_class =
         Class::Handle(compiler->isolate_group()->class_table()->At(kArrayCid));
     RegisterTypeArgumentsUse(compiler->function(), type_usage_info, list_class,
-                             element_type()->definition());
+                             type_arguments()->definition());
   }
-
-  const Register kLengthReg = R2;
-  const Register kElemTypeReg = R1;
-  const Register kResultReg = R0;
-
-  ASSERT(locs()->in(kElementTypePos).reg() == kElemTypeReg);
-  ASSERT(locs()->in(kLengthPos).reg() == kLengthReg);
 
   compiler::Label slow_path, done;
   if (!FLAG_use_slow_path && FLAG_inline_alloc) {
@@ -3108,7 +3187,6 @@ void CreateArrayInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
                              UntaggedPcDescriptors::kOther, locs(), deopt_id(),
                              env());
   __ Bind(&done);
-  ASSERT(locs()->out(0).reg() == kResultReg);
 }
 
 LocationSummary* LoadFieldInstr::MakeLocationSummary(Zone* zone,
@@ -3496,7 +3574,7 @@ void CatchBlockEntryInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
     // deoptimization stub.
     const intptr_t deopt_id = DeoptId::ToDeoptAfter(GetDeoptId());
     if (compiler->is_optimizing()) {
-      compiler->AddDeoptIndexAtCall(deopt_id);
+      compiler->AddDeoptIndexAtCall(deopt_id, env());
     } else {
       compiler->AddCurrentDescriptor(UntaggedPcDescriptors::kDeopt, deopt_id,
                                      InstructionSource());
@@ -3581,7 +3659,7 @@ class CheckStackOverflowSlowPath
               instruction()->locs()->live_registers()->FpuRegisterCount() > 0);
       __ Call(compiler::Address(THR, entry_point_offset));
       compiler->RecordSafepoint(instruction()->locs(), kNumSlowPathArgs);
-      compiler->RecordCatchEntryMoves();
+      compiler->RecordCatchEntryMoves(env);
       compiler->AddDescriptor(
           UntaggedPcDescriptors::kOther, compiler->assembler()->CodeSize(),
           instruction()->deopt_id(), instruction()->source(),
@@ -3590,7 +3668,7 @@ class CheckStackOverflowSlowPath
       __ CallRuntime(kStackOverflowRuntimeEntry, kNumSlowPathArgs);
       compiler->EmitCallsiteMetadata(
           instruction()->source(), instruction()->deopt_id(),
-          UntaggedPcDescriptors::kOther, instruction()->locs());
+          UntaggedPcDescriptors::kOther, instruction()->locs(), env);
     }
 
     if (compiler->isolate_group()->use_osr() && !compiler->is_optimizing() &&
@@ -4626,26 +4704,6 @@ void UnboxInstr::EmitLoadInt64FromBoxOrSmi(FlowGraphCompiler* compiler) {
   __ SmiUntag(result->At(0).reg(), box, &done);
   EmitLoadFromBox(compiler);
   __ Bind(&done);
-}
-
-LocationSummary* BoxUint8Instr::MakeLocationSummary(Zone* zone,
-                                                    bool opt) const {
-  ASSERT(from_representation() == kUnboxedUint8);
-  const intptr_t kNumInputs = 1;
-  const intptr_t kNumTemps = 0;
-  LocationSummary* summary = new (zone)
-      LocationSummary(zone, kNumInputs, kNumTemps, LocationSummary::kNoCall);
-  summary->set_in(0, Location::RequiresRegister());
-  summary->set_out(0, Location::RequiresRegister());
-  return summary;
-}
-
-void BoxUint8Instr::EmitNativeCode(FlowGraphCompiler* compiler) {
-  const Register value = locs()->in(0).reg();
-  const Register out = locs()->out(0).reg();
-
-  __ AndImmediate(out, value, 0xff);
-  __ SmiTag(out);
 }
 
 LocationSummary* BoxInteger32Instr::MakeLocationSummary(Zone* zone,
@@ -6438,17 +6496,6 @@ void CheckArrayBoundInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
     __ b(deopt, CS);
   }
 }
-  
-static bool CanBePairOfImmediateOperands(Value* value,
-                                         compiler::Operand* low,
-                                         compiler::Operand* high) {
-  int64_t imm;
-  if (value->BindsToConstant() && compiler::HasIntegerValue(value->BoundConstant(), &imm)) {
-    return compiler::Operand::CanHold(Utils::Low32Bits(imm), low) &&
-      compiler::Operand::CanHold(Utils::High32Bits(imm), high);
-  }
-  return false;
-}
 
 LocationSummary* BinaryInt64OpInstr::MakeLocationSummary(Zone* zone,
                                                          bool opt) const {
@@ -6489,7 +6536,8 @@ void BinaryInt64OpInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
 
   compiler::Operand right_lo, right_hi;
   if (locs()->in(1).IsConstant()) {
-    const bool ok = CanBePairOfImmediateOperands(right(), &right_lo, &right_hi);
+    const bool ok = CanBePairOfImmediateOperands(locs()->in(1).constant(),
+                                                 &right_lo, &right_hi);
     RELEASE_ASSERT(ok);
   } else {
     PairLocation* right_pair = locs()->in(1).AsPairLocation();
@@ -7311,31 +7359,38 @@ void GotoInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
 LocationSummary* IndirectGotoInstr::MakeLocationSummary(Zone* zone,
                                                         bool opt) const {
   const intptr_t kNumInputs = 1;
-  const intptr_t kNumTemps = 1;
+  const intptr_t kNumTemps = 2;
 
   LocationSummary* summary = new (zone)
       LocationSummary(zone, kNumInputs, kNumTemps, LocationSummary::kNoCall);
 
   summary->set_in(0, Location::RequiresRegister());
   summary->set_temp(0, Location::RequiresRegister());
+  summary->set_temp(1, Location::RequiresRegister());
 
   return summary;
 }
 
 void IndirectGotoInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
-  Register target_address_reg = locs()->temp_slot(0)->reg();
+  Register index_reg = locs()->in(0).reg();
+  Register target_address_reg = locs()->temp(0).reg();
+  Register offset_reg = locs()->temp(1).reg();
+
+  ASSERT(RequiredInputRepresentation(0) == kTagged);
+  __ LoadObject(offset_reg, offsets_);
+  const auto element_address = __ ElementAddressForRegIndex(
+      /*is_load=*/true,
+      /*is_external=*/false, kTypedDataInt32ArrayCid,
+      /*index_scale=*/4,
+      /*index_unboxed=*/false, offset_reg, index_reg);
+  __ ldr(offset_reg, element_address);
 
   // Offset is relative to entry pc.
   const intptr_t entry_to_pc_offset = __ CodeSize() + Instr::kPCReadOffset;
   __ mov(target_address_reg, compiler::Operand(PC));
   __ AddImmediate(target_address_reg, -entry_to_pc_offset);
-  // Add the offset.
-  Register offset_reg = locs()->in(0).reg();
-  compiler::Operand offset_opr =
-      (offset()->definition()->representation() == kTagged)
-          ? compiler::Operand(offset_reg, ASR, kSmiTagSize)
-          : compiler::Operand(offset_reg);
-  __ add(target_address_reg, target_address_reg, offset_opr);
+
+  __ add(target_address_reg, target_address_reg, compiler::Operand(offset_reg));
 
   // Jump to the absolute address.
   __ bx(target_address_reg);
@@ -7443,10 +7498,10 @@ LocationSummary* AllocateObjectInstr::MakeLocationSummary(Zone* zone,
   LocationSummary* locs = new (zone)
       LocationSummary(zone, kNumInputs, kNumTemps, LocationSummary::kCall);
   if (type_arguments() != nullptr) {
-    locs->set_in(0,
-                 Location::RegisterLocation(kAllocationStubTypeArgumentsReg));
+    locs->set_in(kTypeArgumentsPos, Location::RegisterLocation(
+                                        AllocateObjectABI::kTypeArgumentsReg));
   }
-  locs->set_out(0, Location::RegisterLocation(R0));
+  locs->set_out(0, Location::RegisterLocation(AllocateObjectABI::kResultReg));
   return locs;
 }
 

@@ -142,16 +142,18 @@ template("_application_snapshot") {
 
     # Explicitly set DFE so Dart doesn't implicitly depend on the kernel service
     # snapshot (creating a circular dep. for kernel-service_snapshot).
-    dfe = "$_dart_root/pkg/vm/bin/kernel_service.dart"
+    dfe = "NEVER LOADED"
 
     abs_depfile = rebase_path(depfile)
-    abs_output = rebase_path(output, root_build_dir)
+    abs_output = rebase_path(output)
+    rel_output = rebase_path(output, root_build_dir)
 
     vm_args = [
                 "--deterministic",
                 "--packages=$dot_packages",
                 "--snapshot=$abs_output",
                 "--snapshot-depfile=$abs_depfile",
+                "--depfile-output-filename=$rel_output",
               ] + snapshot_vm_args
 
     if (dart_snapshot_kind == "kernel") {
@@ -197,7 +199,6 @@ template("application_snapshot") {
     if (!defined(invoker.deps)) {
       deps = []
     }
-    deps += [ "$_dart_root/utils/kernel-service:kernel-service" ]
   }
 }
 

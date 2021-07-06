@@ -7,6 +7,7 @@ import 'dart:math';
 import 'package:_fe_analyzer_shared/src/scanner/token.dart';
 import 'package:analysis_server/src/protocol_server.dart'
     show doSourceChange_addElementEdit;
+import 'package:analysis_server/src/services/linter/lint_names.dart';
 import 'package:analysis_server/src/utilities/extensions/ast.dart';
 import 'package:analysis_server/src/utilities/strings.dart';
 import 'package:analyzer/dart/analysis/features.dart';
@@ -16,6 +17,7 @@ import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/precedence.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:analyzer/dart/element/element.dart';
+import 'package:analyzer/dart/element/nullability_suffix.dart';
 import 'package:analyzer/dart/element/type.dart';
 import 'package:analyzer/error/listener.dart';
 import 'package:analyzer/src/dart/ast/extensions.dart';
@@ -573,6 +575,66 @@ class CorrectionUtils {
   /// Returns the indentation with the given level.
   String getIndent(int level) => repeat('  ', level);
 
+  /// Returns a [InsertDesc] describing where to insert an ignore_for_file
+  /// comment.
+  ///
+  /// When an existing ignore_for_file comment is found, this returns the start
+  /// of the following line, although calling code may choose to fold into the
+  /// previous line.
+  CorrectionUtils_InsertDesc getInsertDescIgnoreForFile() {
+    var offset = 0;
+    var insertEmptyLineBefore = false;
+    var insertEmptyLineAfter = false;
+    var source = _buffer;
+
+    // Look for the last blank line in any leading comments (to insert after all
+    // header comments but not after any comment "attached" code). If an
+    // existing ignore_for_file comment is found while looking, then insert
+    // after that.
+
+    int? lastBlankLineOffset;
+    var insertOffset = 0;
+    while (offset < source.length - 1) {
+      var nextLineOffset = getLineNext(offset);
+      var line = source.substring(offset, nextLineOffset).trim();
+
+      if (line.startsWith('// ignore_for_file:')) {
+        // Found existing ignore, insert after this.
+        insertOffset = nextLineOffset;
+        break;
+      } else if (line.isEmpty) {
+        // Track last blank line, as we will insert there.
+        lastBlankLineOffset = offset;
+        offset = nextLineOffset;
+      } else if (line.startsWith('#!') || line.startsWith('//')) {
+        // Skip comment/hash-bang.
+        offset = nextLineOffset;
+      } else {
+        // We found some code.
+        // If we found a blank line, insert it after that.
+        if (lastBlankLineOffset != null) {
+          insertOffset = lastBlankLineOffset;
+          insertEmptyLineBefore = true;
+        } else {
+          // Otherwise, insert it before the first line of code.
+          insertOffset = offset;
+          insertEmptyLineAfter = true;
+        }
+        break;
+      }
+    }
+
+    var desc = CorrectionUtils_InsertDesc();
+    desc.offset = insertOffset;
+    if (insertEmptyLineBefore) {
+      desc.prefix = endOfLine;
+    }
+    if (insertEmptyLineAfter) {
+      desc.suffix = endOfLine;
+    }
+    return desc;
+  }
+
   /// Returns a [InsertDesc] describing where to insert a new directive or a
   /// top-level declaration at the top of the file.
   CorrectionUtils_InsertDesc getInsertDescTop() {
@@ -804,6 +866,7 @@ class CorrectionUtils {
       return _getTypeCodeElementArguments(
         librariesToImport: librariesToImport,
         element: aliasElement,
+        isNullable: type.nullabilitySuffix == NullabilitySuffix.question,
         typeArguments: aliasArguments,
       );
     }
@@ -834,6 +897,7 @@ class CorrectionUtils {
       return _getTypeCodeElementArguments(
         librariesToImport: librariesToImport,
         element: type.element,
+        isNullable: type.nullabilitySuffix == NullabilitySuffix.question,
         typeArguments: type.typeArguments,
       );
     }
@@ -906,6 +970,21 @@ class CorrectionUtils {
     return TokenUtils.getTokens(trimmedText, unit.featureSet).isEmpty;
   }
 
+  ClassMemberLocation newCaseClauseAtEndLocation(SwitchStatement statement) {
+    var blockStartLine = getLineThis(statement.leftBracket.offset);
+    var blockEndLine = getLineThis(statement.end);
+    var offset = blockEndLine;
+    var prefix = '';
+    var suffix = '';
+    if (blockStartLine == blockEndLine) {
+      // The switch body is on a single line.
+      prefix = endOfLine;
+      offset = statement.leftBracket.end;
+      suffix = getLinePrefix(statement.offset);
+    }
+    return ClassMemberLocation(prefix, offset, suffix);
+  }
+
   ClassMemberLocation? prepareNewClassMemberLocation(
       CompilationUnitMember declaration,
       bool Function(ClassMember existingMember) shouldSkip) {
@@ -937,11 +1016,16 @@ class CorrectionUtils {
   }
 
   ClassMemberLocation? prepareNewConstructorLocation(
-      ClassDeclaration classDeclaration) {
-    return prepareNewClassMemberLocation(
-        classDeclaration,
-        (member) =>
-            member is FieldDeclaration || member is ConstructorDeclaration);
+      AnalysisSession session, ClassDeclaration classDeclaration) {
+    final sortConstructorsFirst = session.analysisContext.analysisOptions
+        .isLintEnabled(LintNames.sort_constructors_first);
+    // If sort_constructors_first is enabled, don't skip over the fields.
+    final shouldSkip = sortConstructorsFirst
+        ? (member) => member is ConstructorDeclaration
+        : (member) =>
+            member is FieldDeclaration || member is ConstructorDeclaration;
+
+    return prepareNewClassMemberLocation(classDeclaration, shouldSkip);
   }
 
   ClassMemberLocation? prepareNewFieldLocation(
@@ -1095,6 +1179,7 @@ class CorrectionUtils {
   String? _getTypeCodeElementArguments({
     required Set<Source> librariesToImport,
     required Element element,
+    required bool isNullable,
     required List<DartType> typeArguments,
   }) {
     var sb = StringBuffer();
@@ -1122,6 +1207,9 @@ class CorrectionUtils {
     // append simple name
     var name = element.displayName;
     sb.write(name);
+    if (isNullable) {
+      sb.write('?');
+    }
 
     // append type arguments
     if (typeArguments.isNotEmpty) {

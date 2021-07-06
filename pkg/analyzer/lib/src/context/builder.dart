@@ -13,6 +13,7 @@ import 'package:analyzer/src/context/packages.dart';
 import 'package:analyzer/src/dart/analysis/byte_store.dart';
 import 'package:analyzer/src/dart/analysis/driver.dart'
     show AnalysisDriver, AnalysisDriverScheduler;
+import 'package:analyzer/src/dart/analysis/file_content_cache.dart';
 import 'package:analyzer/src/dart/analysis/performance_logger.dart';
 import 'package:analyzer/src/dart/sdk/sdk.dart';
 import 'package:analyzer/src/generated/engine.dart';
@@ -41,8 +42,8 @@ import 'package:yaml/yaml.dart';
 ///    (_embedder.yaml). If one exists then it defines the SDK. If multiple such
 ///    files exist then use the first one found. Otherwise, use the default SDK.
 ///
-/// 3. Look for an analysis options file (`analysis_options.yaml` or
-///    `.analysis_options`) and process the options in the file.
+/// 3. Look for an analysis options file (`analysis_options.yaml`) and process
+///    the options in the file.
 ///
 /// 4. Create a new context. Initialize its source factory based on steps 1, 2
 ///    and 3. Initialize its analysis options from step 4.
@@ -89,8 +90,12 @@ class ContextBuilder {
 
   /// Return an analysis driver that is configured correctly to analyze code in
   /// the directory with the given [path].
-  AnalysisDriver buildDriver(ContextRoot contextRoot, Workspace workspace,
-      {void Function(AnalysisOptionsImpl)? updateAnalysisOptions}) {
+  AnalysisDriver buildDriver(
+    ContextRoot contextRoot,
+    Workspace workspace, {
+    void Function(AnalysisOptionsImpl)? updateAnalysisOptions,
+    FileContentCache? fileContentCache,
+  }) {
     String path = contextRoot.root;
 
     var options = getAnalysisOptions(path, workspace, contextRoot: contextRoot);
@@ -124,6 +129,7 @@ class ContextBuilder {
       enableIndex: enableIndex,
       externalSummaries: summaryData,
       retainDataForTesting: retainDataForTesting,
+      fileContentCache: fileContentCache,
     );
 
     declareVariablesInDriver(driver);

@@ -52,19 +52,15 @@ DEFINE_NATIVE_ENTRY(Object_getHash, 0, 1) {
 
 DEFINE_NATIVE_ENTRY(Object_setHashIfNotSetYet, 0, 2) {
   GET_NON_NULL_NATIVE_ARGUMENT(Smi, hash, arguments->NativeArgAt(1));
-  const intptr_t current_hash = GetHash(isolate, arguments->NativeArgAt(0));
-  if (current_hash != 0) {
-    return Smi::New(current_hash);
-  }
 #if defined(HASH_IN_OBJECT_HEADER)
-  Object::SetCachedHash(arguments->NativeArgAt(0), hash.Value());
+  return Smi::New(
+      Object::SetCachedHashIfNotSet(arguments->NativeArgAt(0), hash.Value()));
 #else
   const Instance& instance =
       Instance::CheckedHandle(zone, arguments->NativeArgAt(0));
-  Heap* heap = isolate->group()->heap();
-  heap->SetHash(instance.ptr(), hash.Value());
+  Heap* heap = thread->heap();
+  return Smi::New(heap->SetHashIfNotSet(instance.ptr(), hash.Value()));
 #endif
-  return hash.ptr();
 }
 
 DEFINE_NATIVE_ENTRY(Object_toString, 0, 1) {
@@ -118,11 +114,23 @@ DEFINE_NATIVE_ENTRY(Object_haveSameRuntimeType, 0, 2) {
 
   const Class& cls = Class::Handle(left.clazz());
   if (cls.IsClosureClass()) {
-    // TODO(vegorov): provide faster implementation for closure classes.
+    const Function& left_function =
+        Function::Handle(zone, Closure::Cast(left).function());
+    const Function& right_function =
+        Function::Handle(zone, Closure::Cast(right).function());
+    if (left_function.signature() == right_function.signature() &&
+        Closure::Cast(left).function_type_arguments() ==
+            Closure::Cast(right).function_type_arguments() &&
+        Closure::Cast(left).delayed_type_arguments() ==
+            Closure::Cast(right).delayed_type_arguments() &&
+        Closure::Cast(left).instantiator_type_arguments() ==
+            Closure::Cast(right).instantiator_type_arguments()) {
+      return Bool::True().ptr();
+    }
     const AbstractType& left_type =
-        AbstractType::Handle(left.GetType(Heap::kNew));
+        AbstractType::Handle(zone, left.GetType(Heap::kNew));
     const AbstractType& right_type =
-        AbstractType::Handle(right.GetType(Heap::kNew));
+        AbstractType::Handle(zone, right.GetType(Heap::kNew));
     return Bool::Get(
                left_type.IsEquivalent(right_type, TypeEquality::kSyntactical))
         .ptr();
@@ -136,9 +144,9 @@ DEFINE_NATIVE_ENTRY(Object_haveSameRuntimeType, 0, 2) {
     return Bool::True().ptr();
   }
   const TypeArguments& left_type_arguments =
-      TypeArguments::Handle(left.GetTypeArguments());
+      TypeArguments::Handle(zone, left.GetTypeArguments());
   const TypeArguments& right_type_arguments =
-      TypeArguments::Handle(right.GetTypeArguments());
+      TypeArguments::Handle(zone, right.GetTypeArguments());
   const intptr_t num_type_args = cls.NumTypeArguments();
   const intptr_t num_type_params = cls.NumTypeParameters();
   return Bool::Get(left_type_arguments.IsSubvectorEquivalent(

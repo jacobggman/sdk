@@ -14,6 +14,7 @@ import 'package:analyzer/src/dart/analysis/analysis_context_collection.dart';
 import 'package:analyzer/src/dart/analysis/byte_store.dart';
 import 'package:analyzer/src/dart/analysis/driver.dart';
 import 'package:analyzer/src/dart/analysis/driver_based_analysis_context.dart';
+import 'package:analyzer/src/dart/analysis/file_content_cache.dart';
 import 'package:analyzer/src/dart/analysis/performance_logger.dart';
 import 'package:analyzer/src/generated/java_engine.dart';
 import 'package:analyzer/src/generated/sdk.dart';
@@ -138,6 +139,9 @@ class ContextManagerImpl implements ContextManager {
   /// The storage for cached results.
   final ByteStore _byteStore;
 
+  /// The cache of file contents shared between context of the collection.
+  final FileContentCache _fileContentCache;
+
   /// The logger used to create analysis contexts.
   final PerformanceLog _performanceLog;
 
@@ -171,6 +175,10 @@ class ContextManagerImpl implements ContextManager {
   final Map<Folder, AnalysisDriver> driverMap =
       HashMap<Folder, AnalysisDriver>();
 
+  /// The timer that is started after creating analysis contexts, to check
+  /// for in-between changes to configuration files.
+  Timer? _collectionConsistencyCheckTimer;
+
   /// Stream subscription we are using to watch each analysis root directory for
   /// changes.
   final Map<Folder, StreamSubscription<WatchEvent>> changeSubscriptions =
@@ -196,8 +204,14 @@ class ContextManagerImpl implements ContextManager {
   /// clean up when we destroy a context.
   final bazelWatchedPathsPerFolder = <Folder, _BazelWatchedFiles>{};
 
-  ContextManagerImpl(this.resourceProvider, this.sdkManager, this._byteStore,
-      this._performanceLog, this._scheduler, this._instrumentationService,
+  ContextManagerImpl(
+      this.resourceProvider,
+      this.sdkManager,
+      this._byteStore,
+      this._fileContentCache,
+      this._performanceLog,
+      this._scheduler,
+      this._instrumentationService,
       {required enableBazelWatcher})
       : pathContext = resourceProvider.pathContext {
     if (enableBazelWatcher) {
@@ -258,9 +272,11 @@ class ContextManagerImpl implements ContextManager {
       var content = _readFile(path);
       var lineInfo = _computeLineInfo(content);
       var errors = analyzeAnalysisOptions(
-          resourceProvider.getFile(path).createSource(),
-          content,
-          driver.sourceFactory);
+        resourceProvider.getFile(path).createSource(),
+        content,
+        driver.sourceFactory,
+        driver.currentSession.analysisContext.contextRoot.root.path,
+      );
       var converter = AnalyzerConverter();
       convertedErrors = converter.convertAnalysisErrors(errors,
           lineInfo: lineInfo, options: driver.analysisOptions);
@@ -406,6 +422,7 @@ class ContextManagerImpl implements ContextManager {
       resourceProvider: resourceProvider,
       scheduler: _scheduler,
       sdkPath: sdkManager.defaultSdkDirectory,
+      fileContentCache: _fileContentCache,
     );
 
     for (var analysisContext in collection.contexts) {
@@ -448,6 +465,7 @@ class ContextManagerImpl implements ContextManager {
     }
 
     callbacks.afterContextsCreated();
+    _scheduleCollectionConsistencyCheck(collection);
   }
 
   /// Clean up and destroy the context associated with the given folder.
@@ -469,6 +487,7 @@ class ContextManagerImpl implements ContextManager {
   void _destroyAnalysisContexts() {
     var collection = _collection;
     if (collection != null) {
+      _collectionConsistencyCheckTimer?.cancel();
       for (var analysisContext in collection.contexts) {
         _destroyAnalysisContext(analysisContext);
       }
@@ -617,6 +636,28 @@ class ContextManagerImpl implements ContextManager {
 
     return existingIncludedSet.containsAll(includedPaths) &&
         existingExcludedSet.containsAll(excludedPaths);
+  }
+
+  /// We create analysis contexts, and then start watching the file system
+  /// for modifications to Dart files, and to configuration files, e.g.
+  /// `pubspec.yaml` file Pub workspaces.
+  ///
+  /// So, it is possible that one of these files will be changed between the
+  /// moment when we read it, and the moment when we started watching for
+  /// changes. Using `package:watcher` before creating analysis contexts
+  /// was still not reliable enough.
+  ///
+  /// To work around this we check after a short timeout, and hope that
+  /// any subsequent changes will be noticed by `package:watcher`.
+  void _scheduleCollectionConsistencyCheck(
+    AnalysisContextCollectionImpl collection,
+  ) {
+    _collectionConsistencyCheckTimer = Timer(Duration(seconds: 1), () {
+      _collectionConsistencyCheckTimer = null;
+      if (!collection.areWorkspacesConsistent) {
+        _createAnalysisContexts();
+      }
+    });
   }
 
   /// Starts watching for the `bazel-bin` and `blaze-bin` symlinks.

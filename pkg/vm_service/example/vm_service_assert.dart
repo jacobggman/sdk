@@ -159,6 +159,7 @@ String assertEventKind(String obj) {
   if (obj == "ServiceUnregistered") return obj;
   if (obj == "TimelineEvents") return obj;
   if (obj == "TimelineStreamSubscriptionsUpdate") return obj;
+  if (obj == "UserTagChanged") return obj;
   if (obj == "VMFlagUpdate") return obj;
   if (obj == "VMUpdate") return obj;
   if (obj == "WriteEvent") return obj;
@@ -317,6 +318,7 @@ vms.ClassRef assertClassRef(vms.ClassRef obj) {
   assertNotNull(obj);
   assertString(obj.id!);
   assertString(obj.name!);
+  assertLibraryRef(obj.library!);
   return obj;
 }
 
@@ -331,10 +333,10 @@ vms.Class assertClass(vms.Class obj) {
   assertNotNull(obj);
   assertString(obj.id!);
   assertString(obj.name!);
+  assertLibraryRef(obj.library!);
   assertBool(obj.isAbstract!);
   assertBool(obj.isConst!);
   assertBool(obj.traceAllocations!);
-  assertLibraryRef(obj.library!);
   assertListOfInstanceRef(obj.interfaces!);
   assertListOfFieldRef(obj.fields!);
   assertListOfFuncRef(obj.functions!);

@@ -276,13 +276,6 @@ void FlowGraph::AddToInitialDefinitions(BlockEntryWithInitialDefs* entry,
   entry->initial_definitions()->Add(defn);
 }
 
-void FlowGraph::InsertBefore(Instruction* next,
-                             Instruction* instr,
-                             Environment* env,
-                             UseKind use_kind) {
-  InsertAfter(next->previous(), instr, env, use_kind);
-}
-
 void FlowGraph::InsertAfter(Instruction* prev,
                             Instruction* instr,
                             Environment* env,
@@ -295,6 +288,16 @@ void FlowGraph::InsertAfter(Instruction* prev,
   ASSERT(instr->env() == NULL);
   if (env != NULL) {
     env->DeepCopyTo(zone(), instr);
+  }
+}
+
+void FlowGraph::InsertSpeculativeAfter(Instruction* prev,
+                                       Instruction* instr,
+                                       Environment* env,
+                                       UseKind use_kind) {
+  InsertAfter(prev, instr, env, use_kind);
+  if (instr->env() != nullptr) {
+    instr->env()->MarkAsLazyDeoptToBeforeDeoptId();
   }
 }
 
@@ -311,6 +314,16 @@ Instruction* FlowGraph::AppendTo(Instruction* prev,
     env->DeepCopyTo(zone(), instr);
   }
   return prev->AppendInstruction(instr);
+}
+Instruction* FlowGraph::AppendSpeculativeTo(Instruction* prev,
+                                            Instruction* instr,
+                                            Environment* env,
+                                            UseKind use_kind) {
+  auto result = AppendTo(prev, instr, env, use_kind);
+  if (instr->env() != nullptr) {
+    instr->env()->MarkAsLazyDeoptToBeforeDeoptId();
+  }
+  return result;
 }
 
 // A wrapper around block entries including an index of the next successor to
@@ -1479,8 +1492,9 @@ void FlowGraph::RenameRecursive(
             // Check if phi corresponds to the same slot.
             auto* phis = phi->block()->phis();
             if ((index < phis->length()) && (*phis)[index] == phi) {
-              phi->UpdateType(
-                  CompileType::FromAbstractType(load->local().type()));
+              phi->UpdateType(CompileType::FromAbstractType(
+                  load->local().type(), CompileType::kCanBeNull,
+                  /*can_be_sentinel=*/load->local().is_late()));
             } else {
               ASSERT(IsCompiledForOsr() && (phi->block()->stack_depth() > 0));
             }
@@ -1869,7 +1883,6 @@ void FlowGraph::InsertConversion(Representation from,
                                  bool is_environment_use) {
   ASSERT(from != to);
   Instruction* insert_before;
-  Instruction* deopt_target;
   PhiInstr* phi = use->instruction()->AsPhi();
   if (phi != NULL) {
     ASSERT(phi->is_alive());
@@ -1877,14 +1890,19 @@ void FlowGraph::InsertConversion(Representation from,
     auto predecessor = phi->block()->PredecessorAt(use->use_index());
     insert_before = predecessor->last_instruction();
     ASSERT(insert_before->GetBlock() == predecessor);
-    deopt_target = NULL;
   } else {
-    deopt_target = insert_before = use->instruction();
+    insert_before = use->instruction();
+  }
+  const Instruction::SpeculativeMode speculative_mode =
+      use->instruction()->SpeculativeModeOfInput(use->use_index());
+  Instruction* deopt_target = nullptr;
+  if (speculative_mode == Instruction::kGuardInputs || to == kUnboxedInt32) {
+    deopt_target = insert_before;
   }
 
   Definition* converted = NULL;
   if (IsUnboxedInteger(from) && IsUnboxedInteger(to)) {
-    const intptr_t deopt_id = (to == kUnboxedInt32) && (deopt_target != NULL)
+    const intptr_t deopt_id = (to == kUnboxedInt32) && (deopt_target != nullptr)
                                   ? deopt_target->DeoptimizationTarget()
                                   : DeoptId::kNone;
     converted =
@@ -1893,18 +1911,17 @@ void FlowGraph::InsertConversion(Representation from,
     converted = new Int32ToDoubleInstr(use->CopyWithType());
   } else if ((from == kUnboxedInt64) && (to == kUnboxedDouble) &&
              CanConvertInt64ToDouble()) {
-    const intptr_t deopt_id = (deopt_target != NULL)
+    const intptr_t deopt_id = (deopt_target != nullptr)
                                   ? deopt_target->DeoptimizationTarget()
                                   : DeoptId::kNone;
     ASSERT(CanUnboxDouble());
     converted = new Int64ToDoubleInstr(use->CopyWithType(), deopt_id);
   } else if ((from == kTagged) && Boxing::Supports(to)) {
-    const intptr_t deopt_id = (deopt_target != NULL)
+    const intptr_t deopt_id = (deopt_target != nullptr)
                                   ? deopt_target->DeoptimizationTarget()
                                   : DeoptId::kNone;
-    converted = UnboxInstr::Create(
-        to, use->CopyWithType(), deopt_id,
-        use->instruction()->SpeculativeModeOfInput(use->use_index()));
+    converted =
+        UnboxInstr::Create(to, use->CopyWithType(), deopt_id, speculative_mode);
   } else if ((to == kTagged) && Boxing::Supports(from)) {
     converted = BoxInstr::Create(from, use->CopyWithType());
   } else {
@@ -1912,29 +1929,31 @@ void FlowGraph::InsertConversion(Representation from,
     // Insert two "dummy" conversion instructions with the correct
     // "from" and "to" representation. The inserted instructions will
     // trigger a deoptimization if executed. See #12417 for a discussion.
-    const intptr_t deopt_id = (deopt_target != NULL)
+    // If the use is not speculative, then this code should be unreachable.
+    // Insert Stop for a graceful error and aid unreachable code elimination.
+    if (speculative_mode == Instruction::kNotSpeculative) {
+      StopInstr* stop = new (Z) StopInstr("Incompatible conversion.");
+      InsertBefore(insert_before, stop, nullptr, FlowGraph::kEffect);
+    }
+    const intptr_t deopt_id = (deopt_target != nullptr)
                                   ? deopt_target->DeoptimizationTarget()
                                   : DeoptId::kNone;
     ASSERT(Boxing::Supports(from));
     ASSERT(Boxing::Supports(to));
     Definition* boxed = BoxInstr::Create(from, use->CopyWithType());
     use->BindTo(boxed);
-    InsertBefore(insert_before, boxed, NULL, FlowGraph::kValue);
-    converted = UnboxInstr::Create(to, new (Z) Value(boxed), deopt_id);
+    InsertBefore(insert_before, boxed, nullptr, FlowGraph::kValue);
+    converted = UnboxInstr::Create(to, new (Z) Value(boxed), deopt_id,
+                                   speculative_mode);
   }
-  ASSERT(converted != NULL);
-  InsertBefore(insert_before, converted, use->instruction()->env(),
+  ASSERT(converted != nullptr);
+  InsertBefore(insert_before, converted,
+               (deopt_target != nullptr) ? deopt_target->env() : nullptr,
                FlowGraph::kValue);
   if (is_environment_use) {
     use->BindToEnvironment(converted);
   } else {
     use->BindTo(converted);
-  }
-
-  if ((to == kUnboxedInt32) && (phi != NULL)) {
-    // Int32 phis are unboxed optimistically. Ensure that unboxing
-    // has deoptimization target attached from the goto instruction.
-    CopyDeoptTarget(converted, insert_before);
   }
 }
 
@@ -2001,7 +2020,8 @@ static void UnboxPhi(PhiInstr* phi, bool is_aot) {
     }
   }
 
-  if ((unboxed == kTagged) && phi->Type()->IsInt()) {
+  if ((unboxed == kTagged) && phi->Type()->IsInt() &&
+      !phi->Type()->can_be_sentinel()) {
     // Conservatively unbox phis that:
     //   - are proven to be of type Int;
     //   - fit into 64bits range;
@@ -2054,6 +2074,7 @@ static void UnboxPhi(PhiInstr* phi, bool is_aot) {
   // to how we treat doubles and other boxed numeric types).
   // In JIT mode only unbox phis which are not fully known to be Smi.
   if ((unboxed == kTagged) && phi->Type()->IsInt() &&
+      !phi->Type()->can_be_sentinel() &&
       (is_aot || phi->Type()->ToCid() != kSmiCid)) {
     unboxed = kUnboxedInt64;
   }

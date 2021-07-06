@@ -1819,9 +1819,48 @@ void Assembler::CompareToStack(Register src, intptr_t depth) {
   cmpl(src, Address(ESP, depth * target::kWordSize));
 }
 
-void Assembler::MoveRegister(Register to, Register from) {
-  if (to != from) {
-    movl(to, from);
+void Assembler::ExtendValue(Register to, Register from, OperandSize sz) {
+  switch (sz) {
+    case kUnsignedFourBytes:
+    case kFourBytes:
+      if (to == from) return;  // No operation needed.
+      return movl(to, from);
+    case kUnsignedTwoBytes:
+      return movzxw(to, from);
+    case kTwoBytes:
+      return movsxw(to, from);
+    case kUnsignedByte:
+      switch (from) {
+        case EAX:
+        case EBX:
+        case ECX:
+        case EDX:
+          return movzxb(to, ByteRegisterOf(from));
+          break;
+        default:
+          if (to != from) {
+            movl(to, from);
+          }
+          return andl(to, Immediate(0xFF));
+      }
+    case kByte:
+      switch (from) {
+        case EAX:
+        case EBX:
+        case ECX:
+        case EDX:
+          return movsxb(to, ByteRegisterOf(from));
+          break;
+        default:
+          if (to != from) {
+            movl(to, from);
+          }
+          shll(to, Immediate(24));
+          return sarl(to, Immediate(24));
+      }
+    default:
+      UNIMPLEMENTED();
+      break;
   }
 }
 
@@ -2827,13 +2866,18 @@ void Assembler::LoadTaggedClassIdMayBeSmi(Register result, Register object) {
 
 void Assembler::EnsureHasClassIdInDEBUG(intptr_t cid,
                                         Register src,
-                                        Register scratch) {
+                                        Register scratch,
+                                        bool can_be_null) {
 #if defined(DEBUG)
   Comment("Check that object in register has cid %" Pd "", cid);
   Label matches;
   LoadClassIdMayBeSmi(scratch, src);
   CompareImmediate(scratch, cid);
   BranchIf(EQUAL, &matches, Assembler::kNearJump);
+  if (can_be_null) {
+    CompareImmediate(scratch, kNullCid);
+    BranchIf(EQUAL, &matches, Assembler::kNearJump);
+  }
   Breakpoint();
   Bind(&matches);
 #endif

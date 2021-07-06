@@ -11,6 +11,7 @@ import 'package:analyzer/src/dart/ast/ast.dart';
 import 'package:analyzer/src/dart/ast/extensions.dart';
 import 'package:analyzer/src/dart/element/element.dart';
 import 'package:analyzer/src/dart/element/type.dart';
+import 'package:analyzer/src/dart/element/type_algebra.dart';
 import 'package:analyzer/src/dart/element/type_system.dart';
 import 'package:analyzer/src/summary/link.dart' as graph
     show DependencyWalker, Node;
@@ -19,11 +20,9 @@ import 'package:analyzer/src/summary2/link.dart';
 import 'package:analyzer/src/summary2/linking_node_scope.dart';
 import 'package:analyzer/src/task/inference_error.dart';
 import 'package:analyzer/src/task/strong_mode.dart';
+import 'package:analyzer/src/util/collection.dart';
+import 'package:analyzer/src/utilities/extensions/collection.dart';
 import 'package:collection/collection.dart';
-
-AstNode _getLinkedNode(Element element) {
-  return (element as ElementImpl).linkedNode!;
-}
 
 /// Resolver for typed constant top-level variables and fields initializers.
 ///
@@ -43,11 +42,11 @@ class ConstantInitializersResolver {
       _library = builder.element;
       for (var unit in _library.units) {
         _unitElement = unit as CompilationUnitElementImpl;
+        unit.classes.forEach(_resolveClassFields);
         unit.extensions.forEach(_resolveExtensionFields);
         unit.mixins.forEach(_resolveClassFields);
-        unit.types.forEach(_resolveClassFields);
 
-        _scope = builder.scope;
+        _scope = builder.element.scope;
         unit.topLevelVariables.forEach(_resolveVariable);
       }
     }
@@ -57,7 +56,7 @@ class ConstantInitializersResolver {
     _enclosingClassHasConstConstructor =
         class_.constructors.any((c) => c.isConst);
 
-    var node = _getLinkedNode(class_);
+    var node = linker.getLinkingNode(class_)!;
     _scope = LinkingNodeContext.get(node).scope;
     for (var element in class_.fields) {
       _resolveVariable(element);
@@ -66,14 +65,15 @@ class ConstantInitializersResolver {
   }
 
   void _resolveExtensionFields(ExtensionElement extension_) {
-    var node = _getLinkedNode(extension_);
+    var node = linker.getLinkingNode(extension_)!;
     _scope = LinkingNodeContext.get(node).scope;
     for (var element in extension_.fields) {
       _resolveVariable(element);
     }
   }
 
-  void _resolveVariable(VariableElement element) {
+  void _resolveVariable(PropertyInducingElement element) {
+    element as PropertyInducingElementImpl;
     if (element.isSynthetic) return;
 
     var variable = linker.getLinkingNode(element) as VariableDeclaration;
@@ -81,14 +81,22 @@ class ConstantInitializersResolver {
 
     var declarationList = variable.parent as VariableDeclarationList;
     var typeNode = declarationList.type;
-    if (typeNode != null) {
-      if (declarationList.isConst ||
-          declarationList.isFinal && _enclosingClassHasConstConstructor) {
-        var astResolver =
-            AstResolver(linker, _unitElement, _scope, variable.initializer!);
-        astResolver.resolveExpression(() => variable.initializer!,
-            contextType: typeNode.type);
-      }
+
+    DartType contextType;
+    if (element.hasTypeInferred) {
+      contextType = element.type;
+    } else if (typeNode != null) {
+      contextType = typeNode.typeOrThrow;
+    } else {
+      contextType = DynamicTypeImpl.instance;
+    }
+
+    if (declarationList.isConst ||
+        declarationList.isFinal && _enclosingClassHasConstConstructor) {
+      var astResolver =
+          AstResolver(linker, _unitElement, _scope, variable.initializer!);
+      astResolver.resolveExpression(() => variable.initializer!,
+          contextType: contextType);
     }
 
     if (element is ConstVariableElement) {
@@ -122,10 +130,22 @@ class TopLevelInference {
   }
 }
 
+/// Information about a base constructor of a mixin application.
+class _BaseConstructor {
+  final InterfaceType superType;
+  final ConstructorElement element;
+
+  _BaseConstructor(this.superType, this.element);
+}
+
 class _ConstructorInferenceNode extends _InferenceNode {
   final _InferenceWalker _walker;
   final ConstructorElement _constructor;
   final List<_FieldFormalParameterWithField> _parameters = [];
+
+  /// If this node is a constructor of a mixin application, this field
+  /// is the corresponding constructor of the superclass.
+  _BaseConstructor? _baseConstructor;
 
   @override
   bool isEvaluated = false;
@@ -133,13 +153,30 @@ class _ConstructorInferenceNode extends _InferenceNode {
   _ConstructorInferenceNode(this._walker, this._constructor) {
     for (var parameter in _constructor.parameters) {
       if (parameter is FieldFormalParameterElementImpl) {
-        if (_hasImplicitType(parameter)) {
+        if (parameter.hasImplicitType) {
           var field = parameter.field;
           if (field != null) {
             _parameters.add(
               _FieldFormalParameterWithField(parameter, field),
             );
           }
+        }
+      }
+    }
+
+    var classElement = _constructor.enclosingElement;
+    if (classElement.isMixinApplication) {
+      var superType = classElement.supertype;
+      if (superType != null) {
+        var index = classElement.constructors.indexOf(_constructor);
+        var superConstructors = superType.element.constructors
+            .where((element) => element.isAccessibleIn(classElement.library))
+            .toList();
+        if (index < superConstructors.length) {
+          _baseConstructor = _BaseConstructor(
+            superType,
+            superConstructors[index],
+          );
         }
       }
     }
@@ -150,10 +187,16 @@ class _ConstructorInferenceNode extends _InferenceNode {
 
   @override
   List<_InferenceNode> computeDependencies() {
-    return _parameters
+    var dependencies = _parameters
         .map((e) => _walker.getNode(e.field))
         .whereNotNull()
         .toList();
+
+    dependencies.addIfNotNull(
+      _walker.getNode(_baseConstructor?.element),
+    );
+
+    return dependencies;
   }
 
   @override
@@ -162,6 +205,37 @@ class _ConstructorInferenceNode extends _InferenceNode {
       var parameter = parameterWithField.parameter;
       parameter.type = parameterWithField.field.type;
     }
+
+    // We have inferred formal parameter types of the base constructor.
+    // Update types of a mixin application constructor formal parameters.
+    var baseConstructor = _baseConstructor;
+    if (baseConstructor != null) {
+      var constructor = _constructor as ConstructorElementImpl;
+      var substitution = Substitution.fromInterfaceType(
+        baseConstructor.superType,
+      );
+      forCorrespondingPairs<ParameterElement, ParameterElement>(
+        constructor.parameters,
+        baseConstructor.element.parameters,
+        (parameter, baseParameter) {
+          var type = substitution.substituteType(baseParameter.type);
+          (parameter as ParameterElementImpl).type = type;
+        },
+      );
+      // Update arguments of `SuperConstructorInvocation` to have the types
+      // (which we have just set) of the corresponding formal parameters.
+      // MixinApp(x, y) : super(x, y);
+      var initializers = constructor.constantInitializers;
+      var initializer = initializers.single as SuperConstructorInvocation;
+      forCorrespondingPairs<ParameterElement, Expression>(
+        constructor.parameters,
+        initializer.argumentList.arguments,
+        (parameter, argument) {
+          (argument as SimpleIdentifierImpl).staticType = parameter.type;
+        },
+      );
+    }
+
     isEvaluated = true;
   }
 
@@ -172,18 +246,6 @@ class _ConstructorInferenceNode extends _InferenceNode {
       parameter.type = DynamicTypeImpl.instance;
     }
     isEvaluated = true;
-  }
-
-  /// TODO(scheglov) https://github.com/dart-lang/sdk/issues/46039
-  bool _hasImplicitType(FieldFormalParameterElementImpl parameter) {
-    var parameterNode = _walker._linker.getLinkingNode(parameter);
-    if (parameterNode is DefaultFormalParameter) {
-      parameterNode = parameterNode.parameter;
-    }
-    return parameterNode is FieldFormalParameterImpl &&
-        parameterNode.type == null &&
-        parameterNode.parameters == null;
-    // return parameter.hasImplicitType;
   }
 }
 
@@ -245,7 +307,7 @@ class _InferenceWalker extends graph.DependencyWalker<_InferenceNode> {
     }
   }
 
-  _InferenceNode? getNode(Element element) {
+  _InferenceNode? getNode(Element? element) {
     return _nodes[element];
   }
 
@@ -271,12 +333,12 @@ class _InitializerInference {
     for (var builder in _linker.builders.values) {
       for (var unit in builder.element.units) {
         _unitElement = unit as CompilationUnitElementImpl;
+        unit.classes.forEach(_addClassConstructorFieldFormals);
+        unit.classes.forEach(_addClassElementFields);
         unit.extensions.forEach(_addExtensionElementFields);
         unit.mixins.forEach(_addClassElementFields);
-        unit.types.forEach(_addClassConstructorFieldFormals);
-        unit.types.forEach(_addClassElementFields);
 
-        _scope = builder.scope;
+        _scope = builder.element.scope;
         for (var element in unit.topLevelVariables) {
           _addVariableNode(element);
         }
@@ -296,7 +358,7 @@ class _InitializerInference {
   }
 
   void _addClassElementFields(ClassElement class_) {
-    var node = _getLinkedNode(class_);
+    var node = _linker.getLinkingNode(class_)!;
     _scope = LinkingNodeContext.get(node).scope;
     for (var element in class_.fields) {
       _addVariableNode(element);
@@ -304,7 +366,7 @@ class _InitializerInference {
   }
 
   void _addExtensionElementFields(ExtensionElement extension_) {
-    var node = _getLinkedNode(extension_);
+    var node = _linker.getLinkingNode(extension_)!;
     _scope = LinkingNodeContext.get(node).scope;
     for (var element in extension_.fields) {
       _addVariableNode(element);
@@ -374,6 +436,10 @@ class _VariableInferenceNode extends _InferenceNode {
 
   @override
   List<_InferenceNode> computeDependencies() {
+    if (_elementImpl.hasTypeInferred) {
+      return const <_InferenceNode>[];
+    }
+
     _resolveInitializer(forDependencies: true);
 
     var collector = _InferenceDependenciesCollector();
@@ -388,14 +454,16 @@ class _VariableInferenceNode extends _InferenceNode {
 
   @override
   void evaluate() {
+    if (_elementImpl.hasTypeInferred) {
+      return;
+    }
+
     _resolveInitializer(forDependencies: false);
 
-    if (!_elementImpl.hasTypeInferred) {
-      var initializerType = _node.initializer!.typeOrThrow;
-      initializerType = _refineType(initializerType);
-      _elementImpl.type = initializerType;
-      _elementImpl.hasTypeInferred = true;
-    }
+    var initializerType = _node.initializer!.typeOrThrow;
+    initializerType = _refineType(initializerType);
+    _elementImpl.type = initializerType;
+    _elementImpl.hasTypeInferred = true;
 
     isEvaluated = true;
   }
@@ -403,6 +471,7 @@ class _VariableInferenceNode extends _InferenceNode {
   @override
   void markCircular(List<_InferenceNode> cycle) {
     _elementImpl.type = DynamicTypeImpl.instance;
+    _elementImpl.hasTypeInferred = true;
 
     var cycleNames = <String>{};
     for (var inferenceNode in cycle) {

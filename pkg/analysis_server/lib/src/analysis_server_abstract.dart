@@ -16,6 +16,7 @@ import 'package:analysis_server/src/plugin/plugin_watcher.dart';
 import 'package:analysis_server/src/server/crash_reporting_attachments.dart';
 import 'package:analysis_server/src/server/diagnostic_server.dart';
 import 'package:analysis_server/src/services/completion/dart/documentation_cache.dart';
+import 'package:analysis_server/src/services/completion/dart/extension_cache.dart';
 import 'package:analysis_server/src/services/correction/namespace.dart';
 import 'package:analysis_server/src/services/pub/pub_api.dart';
 import 'package:analysis_server/src/services/pub/pub_package_service.dart';
@@ -37,9 +38,10 @@ import 'package:analyzer/file_system/overlay_file_system.dart';
 import 'package:analyzer/file_system/physical_file_system.dart';
 import 'package:analyzer/instrumentation/instrumentation.dart';
 import 'package:analyzer/src/dart/analysis/byte_store.dart';
-import 'package:analyzer/src/dart/analysis/driver.dart' as nd;
+import 'package:analyzer/src/dart/analysis/driver.dart' as analysis;
 import 'package:analyzer/src/dart/analysis/file_byte_store.dart'
     show EvictingFileByteStore;
+import 'package:analyzer/src/dart/analysis/file_content_cache.dart';
 import 'package:analyzer/src/dart/analysis/performance_logger.dart';
 import 'package:analyzer/src/dart/ast/element_locator.dart';
 import 'package:analyzer/src/dart/ast/utilities.dart';
@@ -79,8 +81,9 @@ abstract class AbstractAnalysisServer {
   late final SearchEngine searchEngine;
 
   late ByteStore byteStore;
+  late FileContentCache fileContentCache;
 
-  late nd.AnalysisDriverScheduler analysisDriverScheduler;
+  late analysis.AnalysisDriverScheduler analysisDriverScheduler;
 
   DeclarationsTracker? declarationsTracker;
   DeclarationsTrackerData? declarationsTrackerData;
@@ -88,6 +91,10 @@ abstract class AbstractAnalysisServer {
   /// A map from analysis contexts to the documentation cache associated with
   /// each context.
   Map<AnalysisContext, DocumentationCache> documentationForContext = {};
+
+  /// A map from analysis contexts to the extension cache associated with
+  /// each context.
+  Map<AnalysisContext, ExtensionCache> extensionForContext = {};
 
   /// The DiagnosticServer for this AnalysisServer. If available, it can be used
   /// to start an http diagnostics server or return the port for an existing
@@ -181,8 +188,9 @@ abstract class AbstractAnalysisServer {
         this.analysisPerformanceLogger = PerformanceLog(sink);
 
     byteStore = createByteStore(resourceProvider);
+    fileContentCache = FileContentCache(resourceProvider);
 
-    analysisDriverScheduler = nd.AnalysisDriverScheduler(
+    analysisDriverScheduler = analysis.AnalysisDriverScheduler(
         analysisPerformanceLogger,
         driverWatcher: pluginWatcher);
 
@@ -198,6 +206,7 @@ abstract class AbstractAnalysisServer {
       resourceProvider,
       sdkManager,
       byteStore,
+      fileContentCache,
       analysisPerformanceLogger,
       analysisDriverScheduler,
       instrumentationService,
@@ -212,7 +221,8 @@ abstract class AbstractAnalysisServer {
   }
 
   /// A table mapping [Folder]s to the [AnalysisDriver]s associated with them.
-  Map<Folder, nd.AnalysisDriver> get driverMap => contextManager.driverMap;
+  Map<Folder, analysis.AnalysisDriver> get driverMap =>
+      contextManager.driverMap;
 
   /// Return the total time the server's been alive.
   Duration get uptime {
@@ -224,6 +234,7 @@ abstract class AbstractAnalysisServer {
   void addContextsToDeclarationsTracker() {
     declarationsTracker?.discardContexts();
     documentationForContext.clear();
+    extensionForContext.clear();
     for (var driver in driverMap.values) {
       declarationsTracker?.addContext(driver.analysisContext!);
       driver.resetUriResolution();
@@ -255,7 +266,7 @@ abstract class AbstractAnalysisServer {
   /// Return an analysis driver to which the file with the given [path] is
   /// added if one exists, otherwise a driver in which the file was analyzed if
   /// one exists, otherwise the first driver, otherwise `null`.
-  nd.AnalysisDriver? getAnalysisDriver(String path) {
+  analysis.AnalysisDriver? getAnalysisDriver(String path) {
     var drivers = driverMap.values.toList();
     if (drivers.isNotEmpty) {
       // Sort the drivers so that more deeply nested contexts will be checked
@@ -342,6 +353,14 @@ abstract class AbstractAnalysisServer {
     return element;
   }
 
+  /// Return the object used to cache information about extensions in the
+  /// context that produced the [result], or `null` if there is no cache for the
+  /// context.
+  ExtensionCache? getExtensionCacheFor(ResolvedUnitResult result) {
+    var context = result.session.analysisContext;
+    return extensionForContext.putIfAbsent(context, () => ExtensionCache());
+  }
+
   /// Return a [Future] that completes with the resolved [AstNode] at the
   /// given [offset] of the given [file], or with `null` if there is no node as
   /// the [offset].
@@ -395,7 +414,7 @@ abstract class AbstractAnalysisServer {
     return contextManager.isAnalyzed(path);
   }
 
-  void logExceptionResult(nd.ExceptionResult result) {
+  void logExceptionResult(analysis.ExceptionResult result) {
     var message = 'Analysis failed: ${result.filePath}';
     if (result.contextKey != null) {
       message += ' context: ${result.contextKey}';

@@ -2162,6 +2162,18 @@ Message _withArgumentsDeferredPrefixDuplicatedCause(String name) {
 }
 
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Null> codeDeprecateDartExt = messageDeprecateDartExt;
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const MessageCode messageDeprecateDartExt = const MessageCode(
+    "DeprecateDartExt",
+    severity: Severity.info,
+    message:
+        r"""Dart native extensions are deprecated and will be removed in the 2.15 release of Dart SDK.""",
+    tip:
+        r"""Migrate to using FFI instead (https://dart.dev/guides/libraries/c-interop)""");
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
 const Template<
         Message Function(
             int count, int count2, num _num1, num _num2, num _num3)>
@@ -3779,6 +3791,27 @@ const MessageCode messageFfiExpectedConstant = const MessageCode(
     message: r"""Exceptional return value must be a constant.""");
 
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Template<Message Function(String name)> templateFfiExpectedConstantArg =
+    const Template<Message Function(String name)>(
+        messageTemplate: r"""Argument '#name' must be a constant.""",
+        withArguments: _withArgumentsFfiExpectedConstantArg);
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Message Function(String name)> codeFfiExpectedConstantArg =
+    const Code<Message Function(String name)>(
+  "FfiExpectedConstantArg",
+);
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+Message _withArgumentsFfiExpectedConstantArg(String name) {
+  if (name.isEmpty) throw 'No name provided';
+  name = demangleMixinApplicationName(name);
+  return new Message(codeFfiExpectedConstantArg,
+      message: """Argument '${name}' must be a constant.""",
+      arguments: {'name': name});
+}
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
 const Template<Message Function(String name)>
     templateFfiExtendsOrImplementsSealedClass =
     const Template<Message Function(String name)>(
@@ -3930,6 +3963,24 @@ Message _withArgumentsFfiFieldNull(String name) {
           """Field '${name}' cannot have type 'Null', it must be `int`, `double`, `Pointer`, or a subtype of `Struct` or `Union`.""",
       arguments: {'name': name});
 }
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Null> codeFfiLeafCallMustNotReturnHandle =
+    messageFfiLeafCallMustNotReturnHandle;
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const MessageCode messageFfiLeafCallMustNotReturnHandle = const MessageCode(
+    "FfiLeafCallMustNotReturnHandle",
+    message: r"""FFI leaf call must not have Handle return type.""");
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Null> codeFfiLeafCallMustNotTakeHandle =
+    messageFfiLeafCallMustNotTakeHandle;
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const MessageCode messageFfiLeafCallMustNotTakeHandle = const MessageCode(
+    "FfiLeafCallMustNotTakeHandle",
+    message: r"""FFI leaf call must not have Handle argument types.""");
 
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
 const Template<
@@ -5122,6 +5173,64 @@ Message _withArgumentsInputFileNotFound(Uri uri_) {
   String? uri = relativizeUri(uri_);
   return new Message(codeInputFileNotFound,
       message: """Input file not found: ${uri}.""", arguments: {'uri': uri_});
+}
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Template<Message Function(int count, int count2)>
+    templateInstantiationTooFewArguments =
+    const Template<Message Function(int count, int count2)>(
+        messageTemplate:
+            r"""Too few type arguments: #count required, #count2 given.""",
+        tipTemplate: r"""Try adding the missing type arguments.""",
+        withArguments: _withArgumentsInstantiationTooFewArguments);
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Message Function(int count, int count2)>
+    codeInstantiationTooFewArguments =
+    const Code<Message Function(int count, int count2)>(
+  "InstantiationTooFewArguments",
+);
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+Message _withArgumentsInstantiationTooFewArguments(int count, int count2) {
+  // ignore: unnecessary_null_comparison
+  if (count == null) throw 'No count provided';
+  // ignore: unnecessary_null_comparison
+  if (count2 == null) throw 'No count provided';
+  return new Message(codeInstantiationTooFewArguments,
+      message:
+          """Too few type arguments: ${count} required, ${count2} given.""",
+      tip: """Try adding the missing type arguments.""",
+      arguments: {'count': count, 'count2': count2});
+}
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Template<Message Function(int count, int count2)>
+    templateInstantiationTooManyArguments =
+    const Template<Message Function(int count, int count2)>(
+        messageTemplate:
+            r"""Too many type arguments: #count allowed, but #count2 found.""",
+        tipTemplate: r"""Try removing the extra type arguments.""",
+        withArguments: _withArgumentsInstantiationTooManyArguments);
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+const Code<Message Function(int count, int count2)>
+    codeInstantiationTooManyArguments =
+    const Code<Message Function(int count, int count2)>(
+  "InstantiationTooManyArguments",
+);
+
+// DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.
+Message _withArgumentsInstantiationTooManyArguments(int count, int count2) {
+  // ignore: unnecessary_null_comparison
+  if (count == null) throw 'No count provided';
+  // ignore: unnecessary_null_comparison
+  if (count2 == null) throw 'No count provided';
+  return new Message(codeInstantiationTooManyArguments,
+      message:
+          """Too many type arguments: ${count} allowed, but ${count2} found.""",
+      tip: """Try removing the extra type arguments.""",
+      arguments: {'count': count, 'count2': count2});
 }
 
 // DO NOT EDIT. THIS FILE IS GENERATED. SEE TOP OF FILE.

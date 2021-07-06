@@ -23,6 +23,7 @@ across
 activated
 adequate
 adi
+advantage
 affecting
 afterwards
 agree
@@ -201,6 +202,7 @@ class6a
 class6b
 clazz
 cli
+client's
 clil
 clock
 cls
@@ -300,6 +302,7 @@ degrades
 degree
 del
 delimit
+delimiting
 demands
 demangle
 demangled
@@ -333,6 +336,7 @@ dirtify
 dirtifying
 dirty
 disallow
+disambiguating
 disambiguator
 disjoint
 dispatched
@@ -611,6 +615,7 @@ ints
 invariants
 io
 is64
+isolated
 issuecomment
 issuing
 iterables
@@ -872,6 +877,7 @@ per
 perf
 permanently
 permit
+permits
 physically
 pi
 picking
@@ -1150,6 +1156,7 @@ stdlib
 stdout
 sticky
 stmt
+stopgap
 stopped
 storage
 str

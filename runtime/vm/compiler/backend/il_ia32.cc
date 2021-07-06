@@ -331,7 +331,7 @@ void NativeReturnInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
   __ popl(ESI);
   __ popl(EBX);
 
-#if defined(TARGET_OS_FUCHSIA) && defined(USING_SHADOW_CALL_STACK)
+#if defined(DART_TARGET_OS_FUCHSIA) && defined(USING_SHADOW_CALL_STACK)
 #error Unimplemented
 #endif
 
@@ -999,56 +999,88 @@ void NativeCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
   __ Drop(ArgumentCount());  // Drop the arguments.
 }
 
+LocationSummary* FfiCallInstr::MakeLocationSummary(Zone* zone,
+                                                   bool is_optimizing) const {
+  return MakeLocationSummaryInternal(zone, is_optimizing, kNoRegister);
+}
+
 void FfiCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
-  const Register saved_fp = locs()->temp(0).reg();
+  // For regular calls, this holds the FP for rebasing the original locations
+  // during EmitParamMoves.
+  // For leaf calls, this holds the SP used to restore the pre-aligned SP after
+  // the call.
+  const Register saved_fp_or_sp = locs()->temp(0).reg();
   const Register temp = locs()->temp(1).reg();
   const Register branch = locs()->in(TargetAddressIndex()).reg();
 
-  // Save frame pointer because we're going to update it when we enter the exit
-  // frame.
-  __ movl(saved_fp, FPREG);
+  // Ensure these are callee-saved register and are preserved across the call.
+  ASSERT((CallingConventions::kCalleeSaveCpuRegisters &
+          (1 << saved_fp_or_sp)) != 0);
+  // temp doesn't need to be preserved.
 
-  // Make a space to put the return address.
-  __ pushl(compiler::Immediate(0));
+  __ movl(saved_fp_or_sp, is_leaf_ ? SPREG : FPREG);
 
-  // We need to create a dummy "exit frame". It will have a null code object.
-  __ LoadObject(CODE_REG, Object::null_object());
-  __ EnterDartFrame(marshaller_.RequiredStackSpaceInBytes());
+  intptr_t stack_required = marshaller_.RequiredStackSpaceInBytes();
 
-  // Align frame before entering C++ world.
-  if (OS::ActivationFrameAlignment() > 1) {
-    __ andl(SPREG, compiler::Immediate(~(OS::ActivationFrameAlignment() - 1)));
+  if (is_leaf_) {
+    // For leaf calls we need to leave space at the bottom for the pre-align SP.
+    stack_required += compiler::target::kWordSize;
+  } else {
+    // Make a space to put the return address.
+    __ pushl(compiler::Immediate(0));
+
+    // We need to create a dummy "exit frame". It will have a null code object.
+    __ LoadObject(CODE_REG, Object::null_object());
+    __ EnterDartFrame(0);
   }
 
-  EmitParamMoves(compiler);
+  // Reserve space for the arguments that go on the stack (if any), then align.
+  __ ReserveAlignedFrameSpace(stack_required);
+
+  EmitParamMoves(compiler, is_leaf_ ? FPREG : saved_fp_or_sp, temp);
+
+  if (is_leaf_) {
+    // We store the pre-align SP at a fixed offset from the final SP.
+    // Pushing before alignment would mean its placement would vary with how
+    // much the frame was unaligned.
+    __ movl(compiler::Address(SPREG, marshaller_.RequiredStackSpaceInBytes()),
+            saved_fp_or_sp);
+  }
 
   if (compiler::Assembler::EmittingComments()) {
-    __ Comment("Call");
+    __ Comment(is_leaf_ ? "Leaf Call" : "Call");
   }
-  // We need to copy a dummy return address up into the dummy stack frame so the
-  // stack walker will know which safepoint to use. Unlike X64, there's no
-  // PC-relative 'leaq' available, so we have do a trick with 'call'.
-  compiler::Label get_pc;
-  __ call(&get_pc);
-  compiler->EmitCallsiteMetadata(InstructionSource(), deopt_id(),
-                                 UntaggedPcDescriptors::Kind::kOther, locs());
-  __ Bind(&get_pc);
-  __ popl(temp);
-  __ movl(compiler::Address(FPREG, kSavedCallerPcSlotFromFp * kWordSize), temp);
 
-  ASSERT(!CanExecuteGeneratedCodeInSafepoint());
-  // We cannot trust that this code will be executable within a safepoint.
-  // Therefore we delegate the responsibility of entering/exiting the
-  // safepoint to a stub which in the VM isolate's heap, which will never lose
-  // execute permission.
-  __ movl(temp,
-          compiler::Address(
-              THR, compiler::target::Thread::
-                       call_native_through_safepoint_entry_point_offset()));
+  if (is_leaf_) {
+    __ call(branch);
+  } else {
+    // We need to copy a dummy return address up into the dummy stack frame so
+    // the stack walker will know which safepoint to use. Unlike X64, there's no
+    // PC-relative 'leaq' available, so we have do a trick with 'call'.
+    compiler::Label get_pc;
+    __ call(&get_pc);
+    compiler->EmitCallsiteMetadata(InstructionSource(), deopt_id(),
+                                   UntaggedPcDescriptors::Kind::kOther, locs(),
+                                   env());
+    __ Bind(&get_pc);
+    __ popl(temp);
+    __ movl(compiler::Address(FPREG, kSavedCallerPcSlotFromFp * kWordSize),
+            temp);
 
-  // Calls EAX within a safepoint and clobbers EBX.
-  ASSERT(temp == EBX && branch == EAX);
-  __ call(temp);
+    ASSERT(!CanExecuteGeneratedCodeInSafepoint());
+    // We cannot trust that this code will be executable within a safepoint.
+    // Therefore we delegate the responsibility of entering/exiting the
+    // safepoint to a stub which in the VM isolate's heap, which will never lose
+    // execute permission.
+    __ movl(temp,
+            compiler::Address(
+                THR, compiler::target::Thread::
+                         call_native_through_safepoint_entry_point_offset()));
+
+    // Calls EAX within a safepoint and clobbers EBX.
+    ASSERT(branch == EAX);
+    __ call(temp);
+  }
 
   // Restore the stack when a struct by value is returned into memory pointed
   // to by a pointer that is passed into the function.
@@ -1060,10 +1092,10 @@ void FfiCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
     __ subl(SPREG, compiler::Immediate(compiler::target::kWordSize));
   }
 
-  // The x86 calling convention requires floating point values to be returned on
-  // the "floating-point stack" (aka. register ST0). We don't use the
-  // floating-point stack in Dart, so we need to move the return value back into
-  // an XMM register.
+  // The x86 calling convention requires floating point values to be returned
+  // on the "floating-point stack" (aka. register ST0). We don't use the
+  // floating-point stack in Dart, so we need to move the return value back
+  // into an XMM register.
   if (representation() == kUnboxedDouble) {
     __ fstpl(compiler::Address(SPREG, -kDoubleSize));
     __ movsd(XMM0, compiler::Address(SPREG, -kDoubleSize));
@@ -1072,13 +1104,20 @@ void FfiCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
     __ movss(XMM0, compiler::Address(SPREG, -kFloatSize));
   }
 
-  EmitReturnMoves(compiler);
+  // Pass both registers for use as clobbered temp registers.
+  EmitReturnMoves(compiler, saved_fp_or_sp, temp);
 
-  // Leave dummy exit frame.
-  __ LeaveFrame();
+  if (is_leaf_) {
+    // Restore pre-align SP. Was stored right before the first stack argument.
+    __ movl(SPREG,
+            compiler::Address(SPREG, marshaller_.RequiredStackSpaceInBytes()));
+  } else {
+    // Leave dummy exit frame.
+    __ LeaveFrame();
 
-  // Instead of returning to the "fake" return address, we just pop it.
-  __ popl(temp);
+    // Instead of returning to the "fake" return address, we just pop it.
+    __ popl(temp);
+  }
 }
 
 // Keep in sync with NativeReturnInstr::EmitNativeCode.
@@ -1092,7 +1131,7 @@ void NativeEntryInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
   __ xorl(EAX, EAX);
   __ pushl(EAX);
 
-#if defined(TARGET_OS_FUCHSIA) && defined(USING_SHADOW_CALL_STACK)
+#if defined(DART_TARGET_OS_FUCHSIA) && defined(USING_SHADOW_CALL_STACK)
 #error Unimplemented
 #endif
 
@@ -1231,31 +1270,6 @@ void StringToCharCodeInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
   __ movzxb(result, compiler::FieldAddress(str, OneByteString::data_offset()));
   __ SmiTag(result);
   __ Bind(&done);
-}
-
-LocationSummary* StringInterpolateInstr::MakeLocationSummary(Zone* zone,
-                                                             bool opt) const {
-  const intptr_t kNumInputs = 1;
-  const intptr_t kNumTemps = 0;
-  LocationSummary* summary = new (zone)
-      LocationSummary(zone, kNumInputs, kNumTemps, LocationSummary::kCall);
-  summary->set_in(0, Location::RegisterLocation(EAX));
-  summary->set_out(0, Location::RegisterLocation(EAX));
-  return summary;
-}
-
-void StringInterpolateInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
-  Register array = locs()->in(0).reg();
-  __ pushl(array);
-  const int kTypeArgsLen = 0;
-  const int kNumberOfArguments = 1;
-  constexpr int kSizeOfArguments = 1;
-  const Array& kNoArgumentNames = Object::null_array();
-  ArgumentsInfo args_info(kTypeArgsLen, kNumberOfArguments, kSizeOfArguments,
-                          kNoArgumentNames);
-  compiler->GenerateStaticCall(deopt_id(), source(), CallFunction(), args_info,
-                               locs(), ICData::Handle(), ICData::kStatic);
-  ASSERT(locs()->out(0).reg() == EAX);
 }
 
 LocationSummary* Utf8ScanInstr::MakeLocationSummary(Zone* zone,
@@ -2354,9 +2368,11 @@ LocationSummary* CreateArrayInstr::MakeLocationSummary(Zone* zone,
   const intptr_t kNumTemps = 0;
   LocationSummary* locs = new (zone)
       LocationSummary(zone, kNumInputs, kNumTemps, LocationSummary::kCall);
-  locs->set_in(0, Location::RegisterLocation(ECX));
-  locs->set_in(1, Location::RegisterLocation(EDX));
-  locs->set_out(0, Location::RegisterLocation(EAX));
+  locs->set_in(kTypeArgumentsPos,
+               Location::RegisterLocation(AllocateArrayABI::kTypeArgumentsReg));
+  locs->set_in(kLengthPos,
+               Location::RegisterLocation(AllocateArrayABI::kLengthReg));
+  locs->set_out(0, Location::RegisterLocation(AllocateArrayABI::kResultReg));
   return locs;
 }
 
@@ -2366,29 +2382,32 @@ static void InlineArrayAllocation(FlowGraphCompiler* compiler,
                                   compiler::Label* slow_path,
                                   compiler::Label* done) {
   const int kInlineArraySize = 12;  // Same as kInlineInstanceSize.
-  const Register kLengthReg = EDX;
-  const Register kElemTypeReg = ECX;
   const intptr_t instance_size = Array::InstanceSize(num_elements);
 
-  // Instance in EAX.
+  // Instance in AllocateArrayABI::kResultReg.
   // Object end address in EBX.
   __ TryAllocateArray(kArrayCid, instance_size, slow_path,
                       compiler::Assembler::kFarJump,
-                      EAX,   // instance
-                      EBX,   // end address
-                      EDI);  // temp
+                      AllocateArrayABI::kResultReg,  // instance
+                      EBX,                           // end address
+                      EDI);                          // temp
 
   // Store the type argument field.
   __ StoreIntoObjectNoBarrier(
-      EAX, compiler::FieldAddress(EAX, Array::type_arguments_offset()),
-      kElemTypeReg);
+      AllocateArrayABI::kResultReg,
+      compiler::FieldAddress(AllocateArrayABI::kResultReg,
+                             Array::type_arguments_offset()),
+      AllocateArrayABI::kTypeArgumentsReg);
 
   // Set the length field.
   __ StoreIntoObjectNoBarrier(
-      EAX, compiler::FieldAddress(EAX, Array::length_offset()), kLengthReg);
+      AllocateArrayABI::kResultReg,
+      compiler::FieldAddress(AllocateArrayABI::kResultReg,
+                             Array::length_offset()),
+      AllocateArrayABI::kLengthReg);
 
   // Initialize all array elements to raw_null.
-  // EAX: new object start as a tagged pointer.
+  // AllocateArrayABI::kResultReg: new object start as a tagged pointer.
   // EBX: new object end address.
   // EDI: iterator which initially points to the start of the variable
   // data area to be initialized.
@@ -2396,19 +2415,22 @@ static void InlineArrayAllocation(FlowGraphCompiler* compiler,
     const intptr_t array_size = instance_size - sizeof(UntaggedArray);
     const compiler::Immediate& raw_null =
         compiler::Immediate(static_cast<intptr_t>(Object::null()));
-    __ leal(EDI, compiler::FieldAddress(EAX, sizeof(UntaggedArray)));
+    __ leal(EDI, compiler::FieldAddress(AllocateArrayABI::kResultReg,
+                                        sizeof(UntaggedArray)));
     if (array_size < (kInlineArraySize * kWordSize)) {
       intptr_t current_offset = 0;
       __ movl(EBX, raw_null);
       while (current_offset < array_size) {
-        __ StoreIntoObjectNoBarrier(EAX, compiler::Address(EDI, current_offset),
+        __ StoreIntoObjectNoBarrier(AllocateArrayABI::kResultReg,
+                                    compiler::Address(EDI, current_offset),
                                     EBX);
         current_offset += kWordSize;
       }
     } else {
       compiler::Label init_loop;
       __ Bind(&init_loop);
-      __ StoreIntoObjectNoBarrier(EAX, compiler::Address(EDI, 0),
+      __ StoreIntoObjectNoBarrier(AllocateArrayABI::kResultReg,
+                                  compiler::Address(EDI, 0),
                                   Object::null_object());
       __ addl(EDI, compiler::Immediate(kWordSize));
       __ cmpl(EDI, EBX);
@@ -2419,13 +2441,6 @@ static void InlineArrayAllocation(FlowGraphCompiler* compiler,
 }
 
 void CreateArrayInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
-  // Allocate the array.  EDX = length, ECX = element type.
-  const Register kLengthReg = EDX;
-  const Register kElemTypeReg = ECX;
-  const Register kResultReg = EAX;
-  ASSERT(locs()->in(0).reg() == kElemTypeReg);
-  ASSERT(locs()->in(1).reg() == kLengthReg);
-
   compiler::Label slow_path, done;
   if (!FLAG_use_slow_path && FLAG_inline_alloc) {
     if (compiler->is_optimizing() && num_elements()->BindsToConstant() &&
@@ -2446,7 +2461,6 @@ void CreateArrayInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
                              UntaggedPcDescriptors::kOther, locs(), deopt_id(),
                              env());
   __ Bind(&done);
-  ASSERT(locs()->out(0).reg() == kResultReg);
 }
 
 LocationSummary* LoadFieldInstr::MakeLocationSummary(Zone* zone,
@@ -2782,7 +2796,7 @@ void CatchBlockEntryInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
     // deoptimization stub.
     const intptr_t deopt_id = DeoptId::ToDeoptAfter(GetDeoptId());
     if (compiler->is_optimizing()) {
-      compiler->AddDeoptIndexAtCall(deopt_id);
+      compiler->AddDeoptIndexAtCall(deopt_id, env());
     } else {
       compiler->AddCurrentDescriptor(UntaggedPcDescriptors::kDeopt, deopt_id,
                                      InstructionSource());
@@ -2857,7 +2871,7 @@ class CheckStackOverflowSlowPath
     __ CallRuntime(kStackOverflowRuntimeEntry, kNumSlowPathArgs);
     compiler->EmitCallsiteMetadata(
         instruction()->source(), instruction()->deopt_id(),
-        UntaggedPcDescriptors::kOther, instruction()->locs());
+        UntaggedPcDescriptors::kOther, instruction()->locs(), env);
 
     if (compiler->isolate_group()->use_osr() && !compiler->is_optimizing() &&
         instruction()->in_loop()) {
@@ -3873,28 +3887,6 @@ void UnboxInstr::EmitLoadInt64FromBoxOrSmi(FlowGraphCompiler* compiler) {
   __ j(NOT_CARRY, &done, compiler::Assembler::kNearJump);
   EmitLoadFromBox(compiler);
   __ Bind(&done);
-}
-
-LocationSummary* BoxUint8Instr::MakeLocationSummary(Zone* zone,
-                                                    bool opt) const {
-  ASSERT(from_representation() == kUnboxedUint8);
-  const intptr_t kNumInputs = 1;
-  const intptr_t kNumTemps = 0;
-  LocationSummary* summary = new (zone)
-      LocationSummary(zone, kNumInputs, kNumTemps, LocationSummary::kNoCall);
-  summary->set_in(0, Location::RequiresRegister());
-  summary->set_out(0, Location::RequiresRegister());
-  return summary;
-}
-
-void BoxUint8Instr::EmitNativeCode(FlowGraphCompiler* compiler) {
-  const Register value = locs()->in(0).reg();
-  const Register out = locs()->out(0).reg();
-  ASSERT(value != out);
-
-  __ MoveRegister(out, value);
-  __ andl(out, compiler::Immediate(0xff));
-  __ SmiTag(out);
 }
 
 LocationSummary* BoxInteger32Instr::MakeLocationSummary(Zone* zone,
@@ -6438,19 +6430,29 @@ void GotoInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
 LocationSummary* IndirectGotoInstr::MakeLocationSummary(Zone* zone,
                                                         bool opt) const {
   const intptr_t kNumInputs = 1;
-  const intptr_t kNumTemps = 1;
+  const intptr_t kNumTemps = 2;
 
   LocationSummary* summary = new (zone)
       LocationSummary(zone, kNumInputs, kNumTemps, LocationSummary::kNoCall);
 
   summary->set_in(0, Location::RequiresRegister());
   summary->set_temp(0, Location::RequiresRegister());
+  summary->set_temp(1, Location::RequiresRegister());
 
   return summary;
 }
 
 void IndirectGotoInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
-  Register target_reg = locs()->temp_slot(0)->reg();
+  Register index_reg = locs()->in(0).reg();
+  Register target_reg = locs()->temp(0).reg();
+  Register offset = locs()->temp(1).reg();
+
+  ASSERT(RequiredInputRepresentation(0) == kTagged);
+  __ LoadObject(offset, offsets_);
+  __ movl(offset, compiler::Assembler::ElementAddressForRegIndex(
+                      /*is_external=*/false, kTypedDataInt32ArrayCid,
+                      /*index_scale=*/4,
+                      /*index_unboxed=*/false, offset, index_reg));
 
   // Load code object from frame.
   __ movl(target_reg,
@@ -6462,13 +6464,7 @@ void IndirectGotoInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
                           target_reg, Code::saved_instructions_offset()));
   __ addl(target_reg,
           compiler::Immediate(Instructions::HeaderSize() - kHeapObjectTag));
-
-  // Add the offset.
-  Register offset_reg = locs()->in(0).reg();
-  if (offset()->definition()->representation() == kTagged) {
-    __ SmiUntag(offset_reg);
-  }
-  __ addl(target_reg, offset_reg);
+  __ addl(target_reg, offset);
 
   // Jump to the absolute address.
   __ jmp(target_reg);
@@ -6593,8 +6589,7 @@ void ClosureCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
 
   // EBX: Code (compiled code or lazy compile stub).
   ASSERT(locs()->in(0).reg() == EAX);
-  __ movl(EBX, compiler::FieldAddress(
-                   EAX, Function::entry_point_offset(entry_kind())));
+  __ movl(EBX, compiler::FieldAddress(EAX, Function::entry_point_offset()));
 
   // EAX: Function.
   // EDX: Arguments descriptor array.
@@ -6602,7 +6597,7 @@ void ClosureCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
   __ xorl(ECX, ECX);
   __ call(EBX);
   compiler->EmitCallsiteMetadata(source(), deopt_id(),
-                                 UntaggedPcDescriptors::kOther, locs());
+                                 UntaggedPcDescriptors::kOther, locs(), env());
   __ Drop(argument_count);
 }
 
@@ -6627,10 +6622,10 @@ LocationSummary* AllocateObjectInstr::MakeLocationSummary(Zone* zone,
   LocationSummary* locs = new (zone)
       LocationSummary(zone, kNumInputs, kNumTemps, LocationSummary::kCall);
   if (type_arguments() != nullptr) {
-    locs->set_in(0,
-                 Location::RegisterLocation(kAllocationStubTypeArgumentsReg));
+    locs->set_in(kTypeArgumentsPos, Location::RegisterLocation(
+                                        AllocateObjectABI::kTypeArgumentsReg));
   }
-  locs->set_out(0, Location::RegisterLocation(EAX));
+  locs->set_out(0, Location::RegisterLocation(AllocateObjectABI::kResultReg));
   return locs;
 }
 

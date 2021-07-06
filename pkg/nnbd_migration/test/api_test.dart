@@ -3,6 +3,7 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:analyzer/dart/analysis/results.dart';
+import 'package:analyzer/diagnostic/diagnostic.dart';
 import 'package:analyzer_plugin/protocol/protocol_common.dart';
 import 'package:nnbd_migration/nnbd_migration.dart';
 import 'package:test/test.dart';
@@ -29,7 +30,7 @@ class _ProvisionalApiTest extends _ProvisionalApiTestBase
 
 /// Base class for provisional API tests.
 abstract class _ProvisionalApiTestBase extends AbstractContextTest {
-  String projectPath;
+  String? projectPath;
 
   bool get _usePermissiveMode;
 
@@ -50,12 +51,13 @@ abstract class _ProvisionalApiTestBase extends AbstractContextTest {
       Map<String, String> input, Map<String, String> expectedOutput,
       {Map<String, String> migratedInput = const {},
       bool removeViaComments = false,
-      bool warnOnWeakCode = false}) async {
+      bool warnOnWeakCode = false,
+      bool allowErrors = false}) async {
     for (var path in migratedInput.keys) {
-      newFile(path, content: migratedInput[path]);
+      newFile(path, content: migratedInput[path]!);
     }
     for (var path in input.keys) {
-      newFile(path, content: input[path]);
+      newFile(path, content: input[path]!);
     }
     var listener = TestMigrationListener();
     var migration = NullabilityMigration(listener, getLineInfo,
@@ -65,7 +67,12 @@ abstract class _ProvisionalApiTestBase extends AbstractContextTest {
     for (var path in input.keys) {
       var resolvedLibrary = await session.getResolvedLibrary2(path);
       if (resolvedLibrary is ResolvedLibraryResult) {
-        for (var unit in resolvedLibrary.units) {
+        for (var unit in resolvedLibrary.units!) {
+          var errors =
+              unit.errors.where((e) => e.severity == Severity.error).toList();
+          if (!allowErrors && errors.isNotEmpty) {
+            fail('Unexpected error(s): $errors');
+          }
           migration.prepareInput(unit);
         }
       }
@@ -75,7 +82,7 @@ abstract class _ProvisionalApiTestBase extends AbstractContextTest {
     for (var path in input.keys) {
       var resolvedLibrary = await session.getResolvedLibrary2(path);
       if (resolvedLibrary is ResolvedLibraryResult) {
-        for (var unit in resolvedLibrary.units) {
+        for (var unit in resolvedLibrary.units!) {
           migration.processInput(unit);
         }
       }
@@ -84,7 +91,7 @@ abstract class _ProvisionalApiTestBase extends AbstractContextTest {
     for (var path in input.keys) {
       var resolvedLibrary = await session.getResolvedLibrary2(path);
       if (resolvedLibrary is ResolvedLibraryResult) {
-        for (var unit in resolvedLibrary.units) {
+        for (var unit in resolvedLibrary.units!) {
           migration.finalizeInput(unit);
         }
       }
@@ -99,7 +106,7 @@ abstract class _ProvisionalApiTestBase extends AbstractContextTest {
     for (var path in expectedOutput.keys) {
       var sourceEditsForPath = sourceEdits[path] ?? [];
       sourceEditsForPath.sort((a, b) => b.offset.compareTo(a.offset));
-      expect(SourceEdit.applySequence(input[path], sourceEditsForPath),
+      expect(SourceEdit.applySequence(input[path]!, sourceEditsForPath),
           expectedOutput[path]);
     }
   }
@@ -112,18 +119,46 @@ abstract class _ProvisionalApiTestBase extends AbstractContextTest {
   Future<void> _checkSingleFileChanges(String content, String expected,
       {Map<String, String> migratedInput = const {},
       bool removeViaComments = false,
-      bool warnOnWeakCode = false}) async {
+      bool warnOnWeakCode = false,
+      bool allowErrors = false}) async {
     var sourcePath = convertPath('$testsPath/lib/test.dart');
     await _checkMultipleFileChanges(
         {sourcePath: content}, {sourcePath: expected},
         migratedInput: migratedInput,
         removeViaComments: removeViaComments,
-        warnOnWeakCode: warnOnWeakCode);
+        warnOnWeakCode: warnOnWeakCode,
+        allowErrors: allowErrors);
   }
 }
 
 /// Mixin containing test cases for the provisional API.
 mixin _ProvisionalApiTestCases on _ProvisionalApiTestBase {
+  Future<void> test_accept_required_hint() async {
+    var content = '''
+f({/*required*/ int i}) {}
+''';
+    var expected = '''
+f({required int i}) {}
+''';
+    await _checkSingleFileChanges(content, expected);
+  }
+
+  Future<void> test_accept_required_hint_nullable() async {
+    var content = '''
+f({/*required*/ int i}) {}
+g() {
+  f(i: null);
+}
+''';
+    var expected = '''
+f({required int? i}) {}
+g() {
+  f(i: null);
+}
+''';
+    await _checkSingleFileChanges(content, expected);
+  }
+
   Future<void> test_add_explicit_parameter_type() async {
     var content = '''
 abstract class C {
@@ -247,6 +282,54 @@ class C<T extends num?> {}
 void main() {
   C<num> c = C();
 }
+''';
+    await _checkSingleFileChanges(content, expected);
+  }
+
+  Future<void> test_ambiguous_bang_hint_after_as() async {
+    var content = '''
+T f<T>(Object/*?*/ x) => x as T/*!*/;
+''';
+    // The `/*!*/` is considered to apply to the type `T`, not to the expression
+    // `x as T`, so we shouldn't produce `(x as T)!`.
+    var expected = '''
+T f<T>(Object? x) => x as T;
+''';
+    await _checkSingleFileChanges(content, expected);
+  }
+
+  Future<void> test_ambiguous_bang_hint_after_as_assigned() async {
+    var content = '''
+T f<T>(Object/*?*/ x, T/*!*/ y) => y = x as T/*!*/;
+''';
+    // The `/*!*/` is considered to apply to the type `T`, not to the expression
+    // `y = x as T`, so we shouldn't produce `(y = x as T)!`.
+    var expected = '''
+T f<T>(Object? x, T y) => y = x as T;
+''';
+    await _checkSingleFileChanges(content, expected);
+  }
+
+  Future<void> test_ambiguous_bang_hint_after_is() async {
+    var content = '''
+bool f<T>(Object/*?*/ x) => x is T/*!*/;
+''';
+    // The `/*!*/` is considered to apply to the type `T`, not to the expression
+    // `x is T`, so we shouldn't produce `(x is T)!`.
+    var expected = '''
+bool f<T>(Object? x) => x is T;
+''';
+    await _checkSingleFileChanges(content, expected);
+  }
+
+  Future<void> test_ambiguous_bang_hint_after_is_conditional() async {
+    var content = '''
+dynamic f<T>(Object/*?*/ x, dynamic y) => y ? y : x is T/*!*/;
+''';
+    // The `/*!*/` is considered to apply to the type `T`, not to the expression
+    // `y ? y : x is T`, so we shouldn't produce `(y ? y : x is T)!`.
+    var expected = '''
+dynamic f<T>(Object? x, dynamic y) => y ? y : x is T;
 ''';
     await _checkSingleFileChanges(content, expected);
   }
@@ -442,6 +525,7 @@ class B<E> implements List<E/*?*/> {
   final C c;
   B(this.c);
   B<T> cast<T>() => c._castFrom<E, T>(this);
+  noSuchMethod(invocation) => super.noSuchMethod(invocation);
 }
 abstract class C {
   B<T> _castFrom<S, T>(B<S> source);
@@ -452,6 +536,7 @@ class B<E> implements List<E?> {
   final C c;
   B(this.c);
   B<T> cast<T>() => c._castFrom<E, T>(this);
+  noSuchMethod(invocation) => super.noSuchMethod(invocation);
 }
 abstract class C {
   B<T> _castFrom<S, T>(B<S> source);
@@ -535,7 +620,9 @@ main() {
   f(null, null);
 }
 ''';
-    await _checkSingleFileChanges(content, expected);
+    // Note: using allowErrors=true because variables introduced by a catch
+    // clause are final
+    await _checkSingleFileChanges(content, expected, allowErrors: true);
   }
 
   Future<void> test_catch_with_on() async {
@@ -575,7 +662,9 @@ main() {
   f(null, null);
 }
 ''';
-    await _checkSingleFileChanges(content, expected);
+    // Note: using allowErrors=true because variables introduced by a catch
+    // clause are final
+    await _checkSingleFileChanges(content, expected, allowErrors: true);
   }
 
   Future<void> test_class_alias_synthetic_constructor_with_parameters() async {
@@ -1017,6 +1106,86 @@ void main() {
   int? x2 = f2<int>(true, 0, null) as int?;
   int? x3 = f3<int>(true, null, 0) as int?;
   int x4 = f4<int>(true, 0, 0) as int;
+}
+''';
+    await _checkSingleFileChanges(content, expected);
+  }
+
+  Future<void> test_constructor_optional_param_factory() async {
+    var content = '''
+class C {
+  factory C([int x]) => C._();
+  C._([int x = 0]);
+}
+''';
+    var expected = '''
+class C {
+  factory C([int? x]) => C._();
+  C._([int x = 0]);
+}
+''';
+    await _checkSingleFileChanges(content, expected);
+  }
+
+  Future<void>
+      test_constructor_optional_param_factory_redirecting_named() async {
+    var content = '''
+class C {
+  factory C({int x}) = C._;
+  C._({int x = 0});
+}
+''';
+    var expected = '''
+class C {
+  factory C({int x}) = C._;
+  C._({int x = 0});
+}
+''';
+    await _checkSingleFileChanges(content, expected);
+  }
+
+  Future<void>
+      test_constructor_optional_param_factory_redirecting_unnamed() async {
+    var content = '''
+class C {
+  factory C([int x]) = C._;
+  C._([int x = 0]);
+}
+''';
+    var expected = '''
+class C {
+  factory C([int x]) = C._;
+  C._([int x = 0]);
+}
+''';
+    await _checkSingleFileChanges(content, expected);
+  }
+
+  Future<void> test_constructor_optional_param_normal() async {
+    var content = '''
+class C {
+  C([int x]);
+}
+''';
+    var expected = '''
+class C {
+  C([int? x]);
+}
+''';
+    await _checkSingleFileChanges(content, expected);
+  }
+
+  Future<void> test_constructor_optional_param_redirecting() async {
+    var content = '''
+class C {
+  C([int x]) : this._();
+  C._([int x = 0]);
+}
+''';
+    var expected = '''
+class C {
+  C([int? x]) : this._();
+  C._([int x = 0]);
 }
 ''';
     await _checkSingleFileChanges(content, expected);
@@ -1793,7 +1962,9 @@ test() {
   x[0] = 1 as Null;
 }
 ''';
-    await _checkSingleFileChanges(content, expected);
+    // Note: using allowErrors=true because casting a literal int to a Null is
+    // an error
+    await _checkSingleFileChanges(content, expected, allowErrors: true);
   }
 
   Future<void> test_downcast_type_argument_preserve_nullability() async {
@@ -1958,7 +2129,7 @@ List<int> _f(List<int> xs) => [];
     var content = '''
 enum E {
   value
-};
+}
 
 E f() => E.value;
 int g() => f().index;
@@ -1977,7 +2148,7 @@ void h() {
     var expected = '''
 enum E {
   value
-};
+}
 
 E f() => E.value;
 int g() => f().index;
@@ -2308,34 +2479,6 @@ main() {
     await _checkSingleFileChanges(content, expected);
   }
 
-  Future<void> test_extension_null_check_non_nullable_method() async {
-    var content = '''
-class C {}
-extension E on C/*!*/ {
-  void m() {}
-}
-void f(C c, bool b) {
-  if (b) {
-    c.m();
-  }
-}
-void g() => f(null, false);
-''';
-    var expected = '''
-class C {}
-extension E on C {
-  void m() {}
-}
-void f(C? c, bool b) {
-  if (b) {
-    c!.m();
-  }
-}
-void g() => f(null, false);
-''';
-    await _checkSingleFileChanges(content, expected);
-  }
-
   Future<void> test_extension_null_check_non_nullable_binary() async {
     var content = '''
 class C {}
@@ -2364,27 +2507,27 @@ void g() => f(null, false);
     await _checkSingleFileChanges(content, expected);
   }
 
-  Future<void> test_extension_null_check_non_nullable_prefix() async {
+  Future<void> test_extension_null_check_non_nullable_generic() async {
     var content = '''
 class C {}
-extension E on C/*!*/ {
-  void operator-() {}
+extension E<T extends Object/*!*/> on T/*!*/ {
+  void m() {}
 }
 void f(C c, bool b) {
   if (b) {
-    -c;
+    c.m();
   }
 }
 void g() => f(null, false);
 ''';
     var expected = '''
 class C {}
-extension E on C {
-  void operator-() {}
+extension E<T extends Object> on T {
+  void m() {}
 }
 void f(C? c, bool b) {
   if (b) {
-    -c!;
+    c!.m();
   }
 }
 void g() => f(null, false);
@@ -2420,10 +2563,10 @@ void g() => f(null, false);
     await _checkSingleFileChanges(content, expected);
   }
 
-  Future<void> test_extension_null_check_non_nullable_generic() async {
+  Future<void> test_extension_null_check_non_nullable_method() async {
     var content = '''
 class C {}
-extension E<T extends Object/*!*/> on T/*!*/ {
+extension E on C/*!*/ {
   void m() {}
 }
 void f(C c, bool b) {
@@ -2435,12 +2578,40 @@ void g() => f(null, false);
 ''';
     var expected = '''
 class C {}
-extension E<T extends Object> on T {
+extension E on C {
   void m() {}
 }
 void f(C? c, bool b) {
   if (b) {
     c!.m();
+  }
+}
+void g() => f(null, false);
+''';
+    await _checkSingleFileChanges(content, expected);
+  }
+
+  Future<void> test_extension_null_check_non_nullable_prefix() async {
+    var content = '''
+class C {}
+extension E on C/*!*/ {
+  void operator-() {}
+}
+void f(C c, bool b) {
+  if (b) {
+    -c;
+  }
+}
+void g() => f(null, false);
+''';
+    var expected = '''
+class C {}
+extension E on C {
+  void operator-() {}
+}
+void f(C? c, bool b) {
+  if (b) {
+    -c!;
   }
 }
 void g() => f(null, false);
@@ -2825,7 +2996,8 @@ class C {
 }
 g(String s) {}
 ''';
-    await _checkSingleFileChanges(content, expected);
+    // Note: using allowErrors=true because an uninitialized field is an error
+    await _checkSingleFileChanges(content, expected, allowErrors: true);
   }
 
   Future<void> test_field_formal_param_typed() async {
@@ -3005,9 +3177,9 @@ class C {
 class C {
   int i;
   C() : i = 0;
-  factory C.factoryConstructor => C();
-  factory C.factoryRedirect = D;
-  C.redirect : this();
+  factory C.factoryConstructor() => C();
+  factory C.factoryRedirect() = D;
+  C.redirect() : this();
 }
 class D extends C {}
 ''';
@@ -3015,9 +3187,9 @@ class D extends C {}
 class C {
   int i;
   C() : i = 0;
-  factory C.factoryConstructor => C();
-  factory C.factoryRedirect = D;
-  C.redirect : this();
+  factory C.factoryConstructor() => C();
+  factory C.factoryRedirect() = D;
+  C.redirect() : this();
 }
 class D extends C {}
 ''';
@@ -3512,7 +3684,7 @@ int? test(C c) {
 void test({String foo}) async {
   var f = () {
     return "hello";
-  }
+  };
 
   foo.length;
 }
@@ -3521,7 +3693,7 @@ void test({String foo}) async {
 void test({required String foo}) async {
   var f = () {
     return "hello";
-  }
+  };
 
   foo.length;
 }
@@ -6815,7 +6987,7 @@ class C<R> {
 }
 
 void main() {
-  C<int/*!*/>().m(null!);
+  C<int/*!*/>().m(null/*!*/);
 }
 ''';
     var expected = '''
@@ -7158,10 +7330,10 @@ void main() {
   setUp(() {
     i = 1;
   });
+  f(int /*?*/ i) {}
   test('a', () {
     f(i);
   });
-  f(int /*?*/ i) {}
 }
 ''';
     var expected = '''
@@ -7171,10 +7343,10 @@ void main() {
   setUp(() {
     i = 1;
   });
+  f(int? i) {}
   test('a', () {
     f(i);
   });
-  f(int? i) {}
 }
 ''';
     await _checkSingleFileChanges(content, expected);
@@ -7310,10 +7482,10 @@ int? g() => f();
     // The inference of C<int?> forces class C to be declared as
     // C<T extends Object?>.
     var content = '''
-class C<T extends Object> {
+abstract class C<T extends Object> {
   void m(T t);
 }
-class D<T extends Object> {
+abstract class D<T extends Object> {
   void m(T t);
 }
 f(C<int> c, D<int> d) {
@@ -7321,10 +7493,10 @@ f(C<int> c, D<int> d) {
 }
 ''';
     var expected = '''
-class C<T extends Object?> {
+abstract class C<T extends Object?> {
   void m(T t);
 }
-class D<T extends Object> {
+abstract class D<T extends Object> {
   void m(T t);
 }
 f(C<int?> c, D<int> d) {
@@ -8249,6 +8421,6 @@ class _ProvisionalApiTestWithReset extends _ProvisionalApiTestBase
 
   @override
   void _betweenStages() {
-    driver.clearLibraryContext();
+    driver!.clearLibraryContext();
   }
 }

@@ -51,7 +51,7 @@ extension E on int {
     await indexTestUnit('''
 extension E on int {
   test() {}
-  main() {
+  void f() {
     newName() {}
     test(); // marker
   }
@@ -75,7 +75,7 @@ extension E on int {
     await indexTestUnit('''
 extension E on int {
   test() {}
-  main() {
+  void f() {
     var newName;
     test(); // marker
   }
@@ -99,7 +99,7 @@ extension E on int {
     await indexTestUnit('''
 extension E on int {
   test() {}
-  main(newName) {
+  void f(newName) {
     test(); // marker
   }
 }
@@ -187,7 +187,7 @@ extension E on A {
   test() {} // marker
 }
 
-main() {
+void f() {
   var a = A();
   a.test();
   E(a).test();
@@ -207,7 +207,7 @@ extension E on A {
   newName() {} // marker
 }
 
-main() {
+void f() {
   var a = A();
   a.newName();
   E(a).newName();
@@ -220,15 +220,15 @@ main() {
 extension E on int {
   get test {} // marker
   set test(x) {}
-  main() {
+  void f() {
     test;
     test = 1;
   }
 }
-main() {
+void f() {
   0.test;
   0.test = 2;
-  
+
   E(0).test;
   E(0).test = 3;
 }
@@ -243,15 +243,15 @@ main() {
 extension E on int {
   get newName {} // marker
   set newName(x) {}
-  main() {
+  void f() {
     newName;
     newName = 1;
   }
 }
-main() {
+void f() {
   0.newName;
   0.newName = 2;
-  
+
   E(0).newName;
   E(0).newName = 3;
 }
@@ -263,15 +263,15 @@ main() {
 extension E on int {
   get test {}
   set test(x) {} // marker
-  main() {
+  void f() {
     test;
     test = 1;
   }
 }
-main() {
+void f() {
   0.test;
   0.test = 2;
-  
+
   E(0).test;
   E(0).test = 3;
 }
@@ -286,15 +286,15 @@ main() {
 extension E on int {
   get newName {}
   set newName(x) {} // marker
-  main() {
+  void f() {
     newName;
     newName = 1;
   }
 }
-main() {
+void f() {
   0.newName;
   0.newName = 2;
-  
+
   E(0).newName;
   E(0).newName = 3;
 }
@@ -331,7 +331,7 @@ extension on int {
   void test() {} // marker
 }
 
-main() {
+void f() {
   0.test();
 }
 ''');
@@ -347,7 +347,7 @@ extension on int {
   void newName() {} // marker
 }
 
-main() {
+void f() {
   0.newName();
 }
 ''');

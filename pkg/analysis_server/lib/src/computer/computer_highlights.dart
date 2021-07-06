@@ -10,7 +10,7 @@ import 'package:_fe_analyzer_shared/src/scanner/characters.dart' as char;
 import 'package:analysis_server/lsp_protocol/protocol_generated.dart'
     show SemanticTokenTypes, SemanticTokenModifiers;
 import 'package:analysis_server/src/lsp/constants.dart'
-    show CustomSemanticTokenModifiers;
+    show CustomSemanticTokenModifiers, CustomSemanticTokenTypes;
 import 'package:analysis_server/src/lsp/semantic_tokens/encoder.dart'
     show SemanticTokenInfo;
 import 'package:analysis_server/src/lsp/semantic_tokens/mapping.dart'
@@ -100,6 +100,9 @@ class DartUnitHighlightsComputer {
     if (_addIdentifierRegion_class(node)) {
       return;
     }
+    if (_addIdentifierRegion_extension(node)) {
+      return;
+    }
     if (_addIdentifierRegion_constructor(node)) {
       return;
     }
@@ -160,6 +163,8 @@ class DartUnitHighlightsComputer {
     }
     // prepare type
     HighlightRegionType type;
+    SemanticTokenTypes? semanticType;
+    Set<SemanticTokenModifiers>? semanticModifiers;
     var parent = node.parent;
     var grandParent = parent?.parent;
     if (parent is TypeName &&
@@ -167,13 +172,20 @@ class DartUnitHighlightsComputer {
         grandParent.parent is InstanceCreationExpression) {
       // new Class()
       type = HighlightRegionType.CONSTRUCTOR;
+      semanticType = SemanticTokenTypes.class_;
+      semanticModifiers = {CustomSemanticTokenModifiers.constructor};
     } else if (element.isEnum) {
       type = HighlightRegionType.ENUM;
     } else {
       type = HighlightRegionType.CLASS;
     }
     // add region
-    return _addRegion_node(node, type);
+    return _addRegion_node(
+      node,
+      type,
+      semanticTokenType: semanticType,
+      semanticTokenModifiers: semanticModifiers,
+    );
   }
 
   bool _addIdentifierRegion_constructor(SimpleIdentifier node) {
@@ -181,7 +193,14 @@ class DartUnitHighlightsComputer {
     if (element is! ConstructorElement) {
       return false;
     }
-    return _addRegion_node(node, HighlightRegionType.CONSTRUCTOR);
+    return _addRegion_node(
+      node,
+      HighlightRegionType.CONSTRUCTOR,
+      // For semantic tokens, constructor names are coloured like methods but
+      // have a modifier applied.
+      semanticTokenType: SemanticTokenTypes.method,
+      semanticTokenModifiers: {CustomSemanticTokenModifiers.constructor},
+    );
   }
 
   bool _addIdentifierRegion_dynamicLocal(SimpleIdentifier node) {
@@ -205,6 +224,29 @@ class DartUnitHighlightsComputer {
       }
     }
     return false;
+  }
+
+  bool _addIdentifierRegion_extension(SimpleIdentifier node) {
+    var element = node.writeOrReadElement;
+    if (element is! ExtensionElement) {
+      return false;
+    }
+
+    // TODO(dantup): Right now there is no highlight type for extension, so
+    // bail out and do the default thing (which will be to return
+    // IDENTIFIER_DEFAULT). Adding EXTENSION requires coordination with
+    // IntelliJ + bumping protocol version.
+    if (!_computeSemanticTokens) {
+      return false;
+    }
+
+    return _addRegion_node(
+      node,
+      // TODO(dantup): Change this to EXTENSION and add to LSP mapping when
+      // we have it, but for now use CLASS (which is probably what we'll map it
+      // to for LSP semantic tokens anyway).
+      HighlightRegionType.CLASS,
+    );
   }
 
   bool _addIdentifierRegion_field(SimpleIdentifier node) {
@@ -320,7 +362,11 @@ class DartUnitHighlightsComputer {
   bool _addIdentifierRegion_keyword(SimpleIdentifier node) {
     var name = node.name;
     if (name == 'void') {
-      return _addRegion_node(node, HighlightRegionType.KEYWORD);
+      return _addRegion_node(
+        node,
+        HighlightRegionType.KEYWORD,
+        semanticTokenModifiers: {CustomSemanticTokenModifiers.void_},
+      );
     }
     return false;
   }
@@ -654,6 +700,7 @@ class _DartUnitHighlightsComputerVisitor extends RecursiveAstVisitor<void> {
   void visitExportDirective(ExportDirective node) {
     computer._addRegion_node(node, HighlightRegionType.DIRECTIVE);
     computer._addRegion_token(node.keyword, HighlightRegionType.BUILT_IN);
+    _addRegions_configurations(node.configurations);
     super.visitExportDirective(node);
   }
 
@@ -801,6 +848,7 @@ class _DartUnitHighlightsComputerVisitor extends RecursiveAstVisitor<void> {
     computer._addRegion_token(
         node.deferredKeyword, HighlightRegionType.BUILT_IN);
     computer._addRegion_token(node.asKeyword, HighlightRegionType.BUILT_IN);
+    _addRegions_configurations(node.configurations);
     super.visitImportDirective(node);
   }
 
@@ -816,6 +864,31 @@ class _DartUnitHighlightsComputerVisitor extends RecursiveAstVisitor<void> {
   void visitIntegerLiteral(IntegerLiteral node) {
     computer._addRegion_node(node, HighlightRegionType.LITERAL_INTEGER);
     super.visitIntegerLiteral(node);
+  }
+
+  @override
+  void visitInterpolationExpression(InterpolationExpression node) {
+    if (computer._computeSemanticTokens) {
+      // Interpolation expressions may include uncolored code, but clients may
+      // be providing their own basic coloring for strings that would leak
+      // into those uncolored parts so we mark them up to allow the client to
+      // reset the coloring if required.
+      //
+      // Using the String token type with a modifier would work for VS Code but
+      // would cause other editors that don't know about the modifier (and also
+      // do not have their own local coloring) to color the tokens as a string,
+      // which is exactly what we'd like to avoid).
+
+      computer._addRegion_node(
+        node,
+        // The HighlightRegionType here is not used because of the
+        // computer._computeSemanticTokens check above.
+        HighlightRegionType.LITERAL_STRING,
+        semanticTokenType: CustomSemanticTokenTypes.source,
+        semanticTokenModifiers: {CustomSemanticTokenModifiers.interpolation},
+      );
+    }
+    super.visitInterpolationExpression(node);
   }
 
   @override
@@ -1061,6 +1134,14 @@ class _DartUnitHighlightsComputerVisitor extends RecursiveAstVisitor<void> {
     computer._addRegion(offset, end - offset, HighlightRegionType.BUILT_IN,
         semanticTokenModifiers: {CustomSemanticTokenModifiers.control});
     super.visitYieldStatement(node);
+  }
+
+  void _addRegions_configurations(List<Configuration> configurations) {
+    for (final configuration in configurations) {
+      computer._addRegion_token(
+          configuration.ifKeyword, HighlightRegionType.BUILT_IN,
+          semanticTokenModifiers: {CustomSemanticTokenModifiers.control});
+    }
   }
 
   void _addRegions_functionBody(FunctionBody node) {

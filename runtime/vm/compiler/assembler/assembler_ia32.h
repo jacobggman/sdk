@@ -665,8 +665,7 @@ class Assembler : public AssemblerBase {
     movl(Address(address, offset), src);
   }
 
-  // Issues a move instruction if 'to' is not the same as 'from'.
-  void MoveRegister(Register to, Register from);
+  void ExtendValue(Register to, Register from, OperandSize sz) override;
   void PushRegister(Register r);
   void PopRegister(Register r);
 
@@ -717,6 +716,8 @@ class Assembler : public AssemblerBase {
   void PushObject(const Object& object);
   void CompareObject(Register reg, const Object& object);
   void LoadDoubleConstant(XmmRegister dst, double value);
+
+  void LoadCompressed(Register dest, const Address& slot) { movl(dest, slot); }
 
   // Store into a heap object and apply the generational write barrier. (Unlike
   // the other architectures, this does not apply the incremental write barrier,
@@ -831,7 +832,8 @@ class Assembler : public AssemblerBase {
   void LoadTaggedClassIdMayBeSmi(Register result, Register object);
   void EnsureHasClassIdInDEBUG(intptr_t cid,
                                Register src,
-                               Register scratch) override;
+                               Register scratch,
+                               bool can_be_null = false) override;
 
   void SmiUntagOrCheckClass(Register object,
                             intptr_t class_id,
@@ -853,6 +855,12 @@ class Assembler : public AssemblerBase {
                                            Register index,
                                            intptr_t extra_disp = 0);
 
+  void LoadCompressedFieldAddressForRegOffset(Register address,
+                                              Register instance,
+                                              Register offset_in_words_as_smi) {
+    LoadFieldAddressForRegOffset(address, instance, offset_in_words_as_smi);
+  }
+
   void LoadFieldAddressForRegOffset(Register address,
                                     Register instance,
                                     Register offset_in_words_as_smi) {
@@ -867,7 +875,7 @@ class Assembler : public AssemblerBase {
   /*
    * Misc. functionality
    */
-  void SmiTag(Register reg) { addl(reg, reg); }
+  void SmiTag(Register reg) override { addl(reg, reg); }
 
   void SmiUntag(Register reg) { sarl(reg, Immediate(kSmiTagSize)); }
 

@@ -225,7 +225,8 @@ class Forest {
       {bool isNullAware}) {
     assert(fileOffset != null);
     assert(isNullAware != null);
-    return new SpreadElement(expression, isNullAware)..fileOffset = fileOffset;
+    return new SpreadElement(expression, isNullAware: isNullAware)
+      ..fileOffset = fileOffset;
   }
 
   Expression createIfElement(
@@ -750,6 +751,12 @@ class Forest {
       int fileOffset, Expression expression) {
     assert(fileOffset != null);
     return new ParenthesizedExpression(expression)..fileOffset = fileOffset;
+  }
+
+  ConstructorTearOff createConstructorTearOff(
+      int fileOffset, Constructor constructor) {
+    assert(fileOffset != null);
+    return new ConstructorTearOff(constructor)..fileOffset = fileOffset;
   }
 }
 

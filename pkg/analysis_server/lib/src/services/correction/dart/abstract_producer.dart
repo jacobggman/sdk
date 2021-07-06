@@ -6,6 +6,7 @@ import 'dart:math' as math;
 
 import 'package:_fe_analyzer_shared/src/scanner/token.dart';
 import 'package:analysis_server/plugin/edit/fix/fix_dart.dart';
+import 'package:analysis_server/src/services/completion/dart/extension_cache.dart';
 import 'package:analysis_server/src/services/correction/fix/dart/top_level_declarations.dart';
 import 'package:analysis_server/src/services/correction/fix/data_driven/transform_override_set.dart';
 import 'package:analysis_server/src/services/correction/util.dart';
@@ -317,6 +318,27 @@ abstract class SingleCorrectionProducer extends _AbstractCorrectionProducer {
   /// if this producer doesn't support assists.
   AssistKind? get assistKind => null;
 
+  /// Return `true` if this producer can be used to fix diagnostics across
+  /// multiple files. Cases where this will return `false` include fixes for
+  /// which
+  /// - the modified regions can overlap, and
+  /// - fixes that have not been tested to ensure that they can be used this
+  ///   way.
+  bool get canBeAppliedInBulk => false;
+
+  /// Return `true` if this producer can be used to fix multiple diagnostics in
+  /// the same file. Cases where this will return `false` include fixes for
+  /// which
+  /// - the modified regions can overlap,
+  /// - the fix for one diagnostic would fix all diagnostics with the same code,
+  ///   and,
+  /// - fixes that have not been tested to ensure that they can be used this
+  ///   way.
+  ///
+  /// Producers that return `true` should return non-null values from both
+  /// [multiFixKind] and [multiFixArguments].
+  bool get canBeAppliedToFile => false;
+
   /// Return the length of the error message being fixed, or `null` if there is
   /// no diagnostic.
   int? get errorLength => diagnostic?.problemMessage.length;
@@ -392,6 +414,9 @@ abstract class _AbstractCorrectionProducer {
 
   /// Returns the EOL to use for this [CompilationUnit].
   String get eol => utils.endOfLine;
+
+  /// Return the extension cache used to find available extensions.
+  ExtensionCache get extensionCache => _context.dartFixContext!.extensionCache;
 
   String get file => _context.file;
 

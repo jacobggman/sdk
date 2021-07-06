@@ -15,6 +15,7 @@ import 'package:kernel/core_types.dart';
 import 'package:kernel/library_index.dart' show LibraryIndex;
 import 'package:kernel/reference_from_index.dart';
 import 'package:kernel/target/targets.dart' show DiagnosticReporter;
+import 'package:kernel/type_algebra.dart' show Substitution;
 import 'package:kernel/type_environment.dart'
     show TypeEnvironment, SubtypeCheckMode;
 
@@ -221,6 +222,7 @@ class FfiTransformer extends Transformer {
   final Library ffiLibrary;
   final Class allocatorClass;
   final Class nativeFunctionClass;
+  final Class handleClass;
   final Class opaqueClass;
   final Class arrayClass;
   final Class arraySizeClass;
@@ -324,6 +326,7 @@ class FfiTransformer extends Transformer {
         ffiLibrary = index.getLibrary('dart:ffi'),
         allocatorClass = index.getClass('dart:ffi', 'Allocator'),
         nativeFunctionClass = index.getClass('dart:ffi', 'NativeFunction'),
+        handleClass = index.getClass('dart:ffi', 'Handle'),
         opaqueClass = index.getClass('dart:ffi', 'Opaque'),
         arrayClass = index.getClass('dart:ffi', 'Array'),
         arraySizeClass = index.getClass('dart:ffi', '_ArraySize'),
@@ -561,25 +564,30 @@ class FfiTransformer extends Transformer {
     return NativeType.values[index];
   }
 
+  InterfaceType _listOfIntType() => InterfaceType(
+      listClass, Nullability.legacy, [coreTypes.intLegacyRawType]);
+
   ConstantExpression intListConstantExpression(List<int> values) =>
       ConstantExpression(
-          ListConstant(InterfaceType(intClass, Nullability.legacy),
+          ListConstant(coreTypes.intLegacyRawType,
               [for (var v in values) IntConstant(v)]),
-          InterfaceType(listClass, Nullability.legacy,
-              [InterfaceType(intClass, Nullability.legacy)]));
+          _listOfIntType());
 
   /// Expression that queries VM internals at runtime to figure out on which ABI
   /// we are.
   Expression runtimeBranchOnLayout(Map<Abi, int> values) {
-    return MethodInvocation(
+    return InstanceInvocation(
+        InstanceAccessKind.Instance,
         intListConstantExpression([
           values[Abi.wordSize64]!,
           values[Abi.wordSize32Align32]!,
           values[Abi.wordSize32Align64]!
         ]),
-        Name("[]"),
+        listElementAt.name,
         Arguments([StaticInvocation(abiMethod, Arguments([]))]),
-        listElementAt);
+        interfaceTarget: listElementAt,
+        functionType: Substitution.fromInterfaceType(_listOfIntType())
+            .substituteType(listElementAt.getterType) as FunctionType);
   }
 
   /// Generates an expression that returns a new `Pointer<dartType>` offset
@@ -595,12 +603,13 @@ class FfiTransformer extends Transformer {
       StaticInvocation(
           fromAddressInternal,
           Arguments([
-            MethodInvocation(
-                PropertyGet(pointer, addressGetter.name, addressGetter)
+            add(
+                InstanceGet(
+                    InstanceAccessKind.Instance, pointer, addressGetter.name,
+                    interfaceTarget: addressGetter,
+                    resultType: addressGetter.getterType)
                   ..fileOffset = fileOffset,
-                numAddition.name,
-                Arguments([offset]),
-                numAddition)
+                offset)
           ], types: [
             dartType
           ]))
@@ -623,24 +632,28 @@ class FfiTransformer extends Transformer {
       ..fileOffset = fileOffset;
     return Let(
         typedDataVar,
-        MethodInvocation(
-            PropertyGet(VariableGet(typedDataVar), typedDataBufferGetter.name,
-                typedDataBufferGetter)
+        InstanceInvocation(
+            InstanceAccessKind.Instance,
+            InstanceGet(InstanceAccessKind.Instance, VariableGet(typedDataVar),
+                typedDataBufferGetter.name,
+                interfaceTarget: typedDataBufferGetter,
+                resultType: typedDataBufferGetter.getterType)
               ..fileOffset = fileOffset,
             byteBufferAsUint8List.name,
             Arguments([
-              MethodInvocation(
-                  PropertyGet(
+              add(
+                  InstanceGet(
+                      InstanceAccessKind.Instance,
                       VariableGet(typedDataVar),
                       typedDataOffsetInBytesGetter.name,
-                      typedDataOffsetInBytesGetter)
+                      interfaceTarget: typedDataOffsetInBytesGetter,
+                      resultType: typedDataOffsetInBytesGetter.getterType)
                     ..fileOffset = fileOffset,
-                  numAddition.name,
-                  Arguments([offset]),
-                  numAddition),
+                  offset),
               length
             ]),
-            byteBufferAsUint8List));
+            interfaceTarget: byteBufferAsUint8List,
+            functionType: byteBufferAsUint8List.getterType as FunctionType));
   }
 
   /// Generates an expression that returns a new `TypedDataBase` offset
@@ -787,21 +800,34 @@ class FfiTransformer extends Transformer {
 
   Expression getCompoundTypedDataBaseField(
       Expression receiver, int fileOffset) {
-    return PropertyGet(
-        receiver, compoundTypedDataBaseField.name, compoundTypedDataBaseField)
+    return InstanceGet(
+        InstanceAccessKind.Instance, receiver, compoundTypedDataBaseField.name,
+        interfaceTarget: compoundTypedDataBaseField,
+        resultType: compoundTypedDataBaseField.type)
       ..fileOffset = fileOffset;
   }
 
   Expression getArrayTypedDataBaseField(Expression receiver,
       [int fileOffset = TreeNode.noOffset]) {
-    return PropertyGet(
-        receiver, arrayTypedDataBaseField.name, arrayTypedDataBaseField)
+    return InstanceGet(
+        InstanceAccessKind.Instance, receiver, arrayTypedDataBaseField.name,
+        interfaceTarget: arrayTypedDataBaseField,
+        resultType: arrayTypedDataBaseField.type)
       ..fileOffset = fileOffset;
   }
 
+  Expression add(Expression a, Expression b) {
+    return InstanceInvocation(
+        InstanceAccessKind.Instance, a, numAddition.name, Arguments([b]),
+        interfaceTarget: numAddition,
+        functionType: numAddition.getterType as FunctionType);
+  }
+
   Expression multiply(Expression a, Expression b) {
-    return MethodInvocation(
-        a, numMultiplication.name, Arguments([b]), numMultiplication);
+    return InstanceInvocation(
+        InstanceAccessKind.Instance, a, numMultiplication.name, Arguments([b]),
+        interfaceTarget: numMultiplication,
+        functionType: numMultiplication.getterType as FunctionType);
   }
 }
 

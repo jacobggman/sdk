@@ -28,6 +28,8 @@ allocations
 allowlist
 allowlisting
 alt
+amend
+amended
 amortized
 analyses
 animal
@@ -42,6 +44,7 @@ arbitrarily
 asdf
 asserter
 assure
+asterisk
 auth
 authority
 autobianchi
@@ -145,6 +148,8 @@ collisions
 columns
 commented
 commit
+commits
+communication
 companion
 comparative
 comparer
@@ -187,9 +192,15 @@ d1b
 dacoharkes
 dadd
 daemon
+dart$doc$test$tester
+dart\$doc\$test\$tester
 dartanalyzer
+dartdocs
+dartdoctest
+dartdoctestrun
 dartfile
 dartfmt
+darttest
 dash
 dashes
 day
@@ -218,6 +229,7 @@ diagnosticable
 dictionaries
 dictionary
 differences
+differentiate
 differs
 dijkstra
 dijkstras
@@ -234,6 +246,7 @@ dispose
 dist
 div
 divergent
+doctest
 doctype
 doesnt
 dog
@@ -254,8 +267,11 @@ ease
 ec
 echo
 edits
+einst
 elapse
+elegantly
 ell
+emethod
 entrypoint
 entrypoints
 eoo
@@ -264,6 +280,8 @@ erase
 erased
 err
 esc
+estat
+et
 everytime
 evicting
 exceed
@@ -277,7 +295,12 @@ exitcode
 exiting
 expanded
 expansive
+explainer
 extern
+f1
+f2
+f3
+f4
 fac
 faking
 falling
@@ -391,6 +414,7 @@ illustrate
 image
 images
 implementor
+implementors
 imprecision
 in1
 in2
@@ -497,11 +521,13 @@ local3h
 logd
 logs
 loo
+lookahead
 loopback
 mac
 maker
 matters
 mds
+meaningless
 measured
 method1d
 metric
@@ -511,6 +537,7 @@ micro
 minimize
 minimizer
 minimizing
+minst
 mintty
 minutes
 mismatched
@@ -520,11 +547,13 @@ misses
 misspelled
 mistake
 mistakes
+mmethod
 mod
 modelled
 month
 moo
 mouse
+mstat
 mul
 mx
 mxn
@@ -541,6 +570,7 @@ noisy
 nondefault
 nonexisting
 noo
+noted
 numerator
 ob
 obool
@@ -580,6 +610,7 @@ person
 phrase
 pink
 placement
+planned
 plug
 pointed
 policy
@@ -642,6 +673,7 @@ regards
 regenerate
 regressions
 reify
+reject
 reload
 remap
 remaps
@@ -695,6 +727,7 @@ shot
 sigint
 signalled
 sigwinch
+slashes
 slight
 sliver
 smoke
@@ -708,6 +741,7 @@ spellcheck
 spelled
 spelling
 spent
+spills
 splay
 splitting
 spurious
@@ -757,6 +791,7 @@ test3b
 theoretically
 thereof
 thread
+ticks
 timed
 timeout
 timer
@@ -790,6 +825,7 @@ unconverted
 uncover
 uncovers
 underline
+undocumented
 unpacked
 unpatched
 unpaused
@@ -820,6 +856,7 @@ waits
 walt
 warmup
 week
+weekly
 wherever
 whiskers
 wins

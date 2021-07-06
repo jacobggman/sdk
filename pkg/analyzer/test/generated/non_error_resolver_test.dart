@@ -23,6 +23,7 @@ main() {
 class NonConstantValueInInitializer extends PubPackageResolutionTest {
   test_intLiteralInDoubleContext_const_exact() async {
     await assertNoErrorsInCode(r'''
+// @dart = 2.9
 const double x = 0;
 class C {
   const C(double y) : assert(y is double), assert(x is double);
@@ -42,6 +43,7 @@ void main() {
 
   test_isCheckInConstAssert() async {
     await assertNoErrorsInCode(r'''
+// @dart = 2.9
 class C {
   const C() : assert(1 is int);
 }
@@ -1374,67 +1376,9 @@ typedef int f(@app int app);
 ''');
   }
 
-  test_functionWithoutCall() async {
-    await assertNoErrorsInCode(r'''
-abstract class A implements Function {
-}
-class B implements A {
-  void call() {}
-}
-class C extends A {
-  void call() {}
-}
-class D extends C {
-}
-''');
-  }
-
-  test_functionWithoutCall_doesNotImplementFunction() async {
-    await assertNoErrorsInCode("class A {}");
-  }
-
-  test_functionWithoutCall_staticCallMethod() async {
-    await assertNoErrorsInCode(r'''
-class A { }
-class B extends A {
-  static call() { }
-}
-''');
-  }
-
-  test_functionWithoutCall_withNoSuchMethod() async {
-    // 16078
-    await assertNoErrorsInCode(r'''
-class A implements Function {
-  noSuchMethod(inv) {
-    return 42;
-  }
-}
-''');
-  }
-
-  test_functionWithoutCall_withNoSuchMethod_mixin() async {
-    await assertNoErrorsInCode(r'''
-class A {
-  noSuchMethod(inv) {}
-}
-class B extends Object with A implements Function {
-}
-''');
-  }
-
-  test_functionWithoutCall_withNoSuchMethod_superclass() async {
-    await assertNoErrorsInCode(r'''
-class A {
-  noSuchMethod(inv) {}
-}
-class B extends A implements Function {
-}
-''');
-  }
-
   test_genericTypeAlias_castsAndTypeChecks_hasTypeParameters() async {
     await assertNoErrorsInCode('''
+// @dart = 2.9
 typedef Foo<S> = S Function<T>(T x);
 
 main(Object p) {
@@ -1452,6 +1396,7 @@ main(Object p) {
 
   test_genericTypeAlias_castsAndTypeChecks_noTypeParameters() async {
     await assertNoErrorsInCode('''
+// @dart = 2.9
 typedef Foo = T Function<T>(T x);
 
 main(Object p) {
@@ -2421,15 +2366,18 @@ class Foo {
   const factory Foo.foo() native 'Foo_Foo_foo';
 }
 ''', [
+      error(HintCode.USE_OF_NATIVE_EXTENSION, 0, 20),
       error(ParserErrorCode.CONST_CONSTRUCTOR_WITH_BODY, 47, 6),
     ]);
   }
 
   test_nativeFunctionBodyInNonSDKCode_function() async {
-    await assertNoErrorsInCode(r'''
+    await assertErrorsInCode(r'''
 import 'dart-ext:x';
 int m(a) native 'string';
-''');
+''', [
+      error(HintCode.USE_OF_NATIVE_EXTENSION, 0, 20),
+    ]);
   }
 
   test_newWithAbstractClass_factory() async {
@@ -2868,13 +2816,9 @@ main() {}
       if (!unbounded.isNull) {
         expect(bounded.isNull, true);
         assertType(unbounded.type, 'Unbounded<dynamic>');
-        expect(unbounded.type!.typeArguments, hasLength(1));
-        expect(unbounded.type!.typeArguments[0].isDynamic, isTrue);
       } else {
         expect(unbounded.isNull, true);
         assertType(bounded.type, 'Bounded<String>');
-        expect(bounded.type!.typeArguments, hasLength(1));
-        assertType(bounded.type!.typeArguments[0], 'String');
       }
     });
   }
@@ -3140,6 +3084,7 @@ main(Object p) {
 
   test_typePromotion_if_is_and_subThenSuper() async {
     await assertNoErrorsInCode(r'''
+// @dart = 2.9
 class A {
   var a;
 }

@@ -11,10 +11,37 @@ import 'fix_processor.dart';
 
 void main() {
   defineReflectiveSuite(() {
-    defineReflectiveTests(PreferFinalInForEachTest);
+    defineReflectiveTests(PreferFinalFieldsBulkTest);
     defineReflectiveTests(PreferFinalFieldsTest);
     defineReflectiveTests(PreferFinalFieldsWithNullSafetyTest);
+    defineReflectiveTests(PreferFinalInForEachTest);
+    defineReflectiveTests(PreferFinalLocalsBulkTest);
   });
+}
+
+@reflectiveTest
+class PreferFinalFieldsBulkTest extends BulkFixProcessorTest {
+  @override
+  String get lintCode => LintNames.prefer_final_fields;
+
+  Future<void> test_singleFile() async {
+    await resolveTestCode('''
+class C {
+  int _f = 2;
+  var _f2 = 2;
+  int get g => _f;
+  int get g2 => _f2;
+}
+''');
+    await assertHasFix('''
+class C {
+  final int _f = 2;
+  final _f2 = 2;
+  int get g => _f;
+  int get g2 => _f2;
+}
+''');
+  }
 }
 
 @reflectiveTest
@@ -134,6 +161,27 @@ void fn() {
   for (final int i in [1, 2, 3]) {
     print(i);
   }
+}
+''');
+  }
+}
+
+@reflectiveTest
+class PreferFinalLocalsBulkTest extends BulkFixProcessorTest {
+  @override
+  String get lintCode => LintNames.prefer_final_locals;
+
+  Future<void> test_singleFile() async {
+    await resolveTestCode('''
+f() {
+  var x = 0;
+  var y = x;
+}
+''');
+    await assertHasFix('''
+f() {
+  final x = 0;
+  final y = x;
 }
 ''');
   }

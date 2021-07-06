@@ -128,16 +128,18 @@ StreamInfo Service::heapsnapshot_stream("HeapSnapshot");
 StreamInfo Service::logging_stream("Logging");
 StreamInfo Service::extension_stream("Extension");
 StreamInfo Service::timeline_stream("Timeline");
+StreamInfo Service::profiler_stream("Profiler");
 
 const uint8_t* Service::dart_library_kernel_ = NULL;
 intptr_t Service::dart_library_kernel_len_ = 0;
 
-static StreamInfo* streams_[] = {
-    &Service::vm_stream,      &Service::isolate_stream,
-    &Service::debug_stream,   &Service::gc_stream,
-    &Service::echo_stream,    &Service::heapsnapshot_stream,
-    &Service::logging_stream, &Service::extension_stream,
-    &Service::timeline_stream};
+static StreamInfo* const streams_[] = {
+    &Service::vm_stream,       &Service::isolate_stream,
+    &Service::debug_stream,    &Service::gc_stream,
+    &Service::echo_stream,     &Service::heapsnapshot_stream,
+    &Service::logging_stream,  &Service::extension_stream,
+    &Service::timeline_stream, &Service::profiler_stream,
+};
 
 bool Service::ListenStream(const char* stream_id) {
   if (FLAG_trace_service) {
@@ -1395,7 +1397,7 @@ void Service::ScheduleExtensionHandler(const Instance& handler,
                                       parameter_values, reply_port, id);
 }
 
-static const MethodParameter* get_isolate_params[] = {
+static const MethodParameter* const get_isolate_params[] = {
     ISOLATE_PARAMETER,
     NULL,
 };
@@ -1404,7 +1406,7 @@ static void GetIsolate(Thread* thread, JSONStream* js) {
   thread->isolate()->PrintJSON(js, false);
 }
 
-static const MethodParameter* get_isolate_group_params[] = {
+static const MethodParameter* const get_isolate_group_params[] = {
     ISOLATE_GROUP_PARAMETER,
     NULL,
 };
@@ -1462,7 +1464,7 @@ static void GetIsolateGroup(Thread* thread, JSONStream* js) {
   });
 }
 
-static const MethodParameter* get_memory_usage_params[] = {
+static const MethodParameter* const get_memory_usage_params[] = {
     ISOLATE_PARAMETER,
     NULL,
 };
@@ -1471,7 +1473,7 @@ static void GetMemoryUsage(Thread* thread, JSONStream* js) {
   thread->isolate()->PrintMemoryUsageJSON(js);
 }
 
-static const MethodParameter* get_isolate_group_memory_usage_params[] = {
+static const MethodParameter* const get_isolate_group_memory_usage_params[] = {
     ISOLATE_GROUP_PARAMETER,
     NULL,
 };
@@ -1482,7 +1484,7 @@ static void GetIsolateGroupMemoryUsage(Thread* thread, JSONStream* js) {
   });
 }
 
-static const MethodParameter* get_scripts_params[] = {
+static const MethodParameter* const get_scripts_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     NULL,
 };
@@ -1516,7 +1518,7 @@ static void GetScripts(Thread* thread, JSONStream* js) {
   }
 }
 
-static const MethodParameter* get_stack_params[] = {
+static const MethodParameter* const get_stack_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     new UIntParameter("limit", false),
     NULL,
@@ -2177,7 +2179,7 @@ static void PrintInboundReferences(Thread* thread,
   }
 }
 
-static const MethodParameter* get_inbound_references_params[] = {
+static const MethodParameter* const get_inbound_references_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     NULL,
 };
@@ -2310,7 +2312,7 @@ static void PrintRetainingPath(Thread* thread,
   }
 }
 
-static const MethodParameter* get_retaining_path_params[] = {
+static const MethodParameter* const get_retaining_path_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     NULL,
 };
@@ -2351,7 +2353,7 @@ static void GetRetainingPath(Thread* thread, JSONStream* js) {
   PrintRetainingPath(thread, &obj, limit, js);
 }
 
-static const MethodParameter* get_retained_size_params[] = {
+static const MethodParameter* const get_retained_size_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     new IdParameter("targetId", true),
     NULL,
@@ -2390,7 +2392,7 @@ static void GetRetainedSize(Thread* thread, JSONStream* js) {
   result.PrintJSON(js, true);
 }
 
-static const MethodParameter* get_reachable_size_params[] = {
+static const MethodParameter* const get_reachable_size_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     new IdParameter("targetId", true),
     NULL,
@@ -2429,7 +2431,7 @@ static void GetReachableSize(Thread* thread, JSONStream* js) {
   result.PrintJSON(js, true);
 }
 
-static const MethodParameter* invoke_params[] = {
+static const MethodParameter* const invoke_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     NULL,
 };
@@ -2562,7 +2564,7 @@ static void Invoke(Thread* thread, JSONStream* js) {
                  js->method());
 }
 
-static const MethodParameter* evaluate_params[] = {
+static const MethodParameter* const evaluate_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     NULL,
 };
@@ -2686,11 +2688,12 @@ static void Evaluate(Thread* thread, JSONStream* js) {
       js->method());
 }
 
-static const MethodParameter* build_expression_evaluation_scope_params[] = {
-    RUNNABLE_ISOLATE_PARAMETER,
-    new IdParameter("frameIndex", false),
-    new IdParameter("targetId", false),
-    NULL,
+static const MethodParameter* const build_expression_evaluation_scope_params[] =
+    {
+        RUNNABLE_ISOLATE_PARAMETER,
+        new IdParameter("frameIndex", false),
+        new IdParameter("targetId", false),
+        NULL,
 };
 
 static void BuildExpressionEvaluationScope(Thread* thread, JSONStream* js) {
@@ -2795,6 +2798,7 @@ static void BuildExpressionEvaluationScope(Thread* thread, JSONStream* js) {
                      "%s: invalid 'targetId' parameter: "
                      "Cannot evaluate against a VM-internal object",
                      js->method());
+      return;
     }
   }
 
@@ -2861,7 +2865,7 @@ static bool ParseCSVList(const char* csv_list,
 }
 #endif
 
-static const MethodParameter* compile_expression_params[] = {
+static const MethodParameter* const compile_expression_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     new StringParameter("expression", true),
     new StringParameter("definitions", false),
@@ -2931,7 +2935,7 @@ static void CompileExpression(Thread* thread, JSONStream* js) {
 #endif
 }
 
-static const MethodParameter* evaluate_compiled_expression_params[] = {
+static const MethodParameter* const evaluate_compiled_expression_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     new UIntParameter("frameIndex", false),
     new IdParameter("targetId", false),
@@ -3065,7 +3069,7 @@ static void EvaluateCompiledExpression(Thread* thread, JSONStream* js) {
   }
 }
 
-static const MethodParameter* evaluate_in_frame_params[] = {
+static const MethodParameter* const evaluate_in_frame_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     new UIntParameter("frameIndex", true),
     new MethodParameter("expression", true),
@@ -3164,7 +3168,7 @@ class GetInstancesVisitor : public ObjectGraph::Visitor {
   intptr_t count_;
 };
 
-static const MethodParameter* get_instances_params[] = {
+static const MethodParameter* const get_instances_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     NULL,
 };
@@ -3218,7 +3222,7 @@ static void GetInstances(Thread* thread, JSONStream* js) {
   }
 }
 
-static const MethodParameter* get_instances_as_array_params[] = {
+static const MethodParameter* const get_instances_as_array_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     NULL,
 };
@@ -3266,7 +3270,7 @@ static void GetInstancesAsArray(Thread* thread, JSONStream* js) {
   instances.PrintJSON(js, /* as_ref */ true);
 }
 
-static const MethodParameter* get_ports_params[] = {
+static const MethodParameter* const get_ports_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     NULL,
 };
@@ -3302,7 +3306,7 @@ static const char* const report_enum_names[] = {
 };
 #endif
 
-static const MethodParameter* get_source_report_params[] = {
+static const MethodParameter* const get_source_report_params[] = {
 #if !defined(DART_PRECOMPILED_RUNTIME)
     RUNNABLE_ISOLATE_PARAMETER,
     new EnumListParameter("reports", true, report_enum_names),
@@ -3381,7 +3385,7 @@ static void GetSourceReport(Thread* thread, JSONStream* js) {
 #endif  // !DART_PRECOMPILED_RUNTIME
 }
 
-static const MethodParameter* reload_sources_params[] = {
+static const MethodParameter* const reload_sources_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     new BoolParameter("force", false),
     new BoolParameter("pause", false),
@@ -3488,7 +3492,7 @@ static void AddBreakpointCommon(Thread* thread,
   bpt->PrintJSON(js);
 }
 
-static const MethodParameter* add_breakpoint_params[] = {
+static const MethodParameter* const add_breakpoint_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     new IdParameter("scriptId", true),
     new UIntParameter("line", true),
@@ -3513,7 +3517,7 @@ static void AddBreakpoint(Thread* thread, JSONStream* js) {
   AddBreakpointCommon(thread, js, script_uri);
 }
 
-static const MethodParameter* add_breakpoint_with_script_uri_params[] = {
+static const MethodParameter* const add_breakpoint_with_script_uri_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     new IdParameter("scriptUri", true),
     new UIntParameter("line", true),
@@ -3531,7 +3535,7 @@ static void AddBreakpointWithScriptUri(Thread* thread, JSONStream* js) {
   AddBreakpointCommon(thread, js, script_uri);
 }
 
-static const MethodParameter* add_breakpoint_at_entry_params[] = {
+static const MethodParameter* const add_breakpoint_at_entry_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     new IdParameter("functionId", true),
     NULL,
@@ -3560,7 +3564,7 @@ static void AddBreakpointAtEntry(Thread* thread, JSONStream* js) {
   bpt->PrintJSON(js);
 }
 
-static const MethodParameter* add_breakpoint_at_activation_params[] = {
+static const MethodParameter* const add_breakpoint_at_activation_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     new IdParameter("objectId", true),
     NULL,
@@ -3588,7 +3592,7 @@ static void AddBreakpointAtActivation(Thread* thread, JSONStream* js) {
   bpt->PrintJSON(js);
 }
 
-static const MethodParameter* remove_breakpoint_params[] = {
+static const MethodParameter* const remove_breakpoint_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     NULL,
 };
@@ -3714,7 +3718,7 @@ static void HandleDartMetric(Thread* thread, JSONStream* js, const char* id) {
   PrintInvalidParamError(js, "metricId");
 }
 
-static const MethodParameter* get_isolate_metric_list_params[] = {
+static const MethodParameter* const get_isolate_metric_list_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     NULL,
 };
@@ -3741,7 +3745,7 @@ static void GetIsolateMetricList(Thread* thread, JSONStream* js) {
   }
 }
 
-static const MethodParameter* get_isolate_metric_params[] = {
+static const MethodParameter* const get_isolate_metric_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     NULL,
 };
@@ -3780,7 +3784,7 @@ static const char* const timeline_streams_enum_names[] = {
 #undef DEFINE_NAME
         NULL};
 
-static const MethodParameter* set_vm_timeline_flags_params[] = {
+static const MethodParameter* const set_vm_timeline_flags_params[] = {
     NO_ISOLATE_PARAMETER,
     new EnumListParameter("recordedStreams",
                           false,
@@ -3831,7 +3835,7 @@ static void SetVMTimelineFlags(Thread* thread, JSONStream* js) {
 #endif
 }
 
-static const MethodParameter* get_vm_timeline_flags_params[] = {
+static const MethodParameter* const get_vm_timeline_flags_params[] = {
     NO_ISOLATE_PARAMETER,
     NULL,
 };
@@ -3848,7 +3852,7 @@ static void GetVMTimelineFlags(Thread* thread, JSONStream* js) {
 #endif
 }
 
-static const MethodParameter* get_vm_timeline_micros_params[] = {
+static const MethodParameter* const get_vm_timeline_micros_params[] = {
     NO_ISOLATE_PARAMETER,
     NULL,
 };
@@ -3859,7 +3863,7 @@ static void GetVMTimelineMicros(Thread* thread, JSONStream* js) {
   obj.AddPropertyTimeMicros("timestamp", OS::GetCurrentMonotonicMicros());
 }
 
-static const MethodParameter* clear_vm_timeline_params[] = {
+static const MethodParameter* const clear_vm_timeline_params[] = {
     NO_ISOLATE_PARAMETER,
     NULL,
 };
@@ -3874,7 +3878,7 @@ static void ClearVMTimeline(Thread* thread, JSONStream* js) {
   PrintSuccess(js);
 }
 
-static const MethodParameter* get_vm_timeline_params[] = {
+static const MethodParameter* const get_vm_timeline_params[] = {
     NO_ISOLATE_PARAMETER,
     new Int64Parameter("timeOriginMicros", false),
     new Int64Parameter("timeExtentMicros", false),
@@ -3920,7 +3924,7 @@ static const Debugger::ResumeAction step_enum_values[] = {
     Debugger::kContinue,  // Default value
 };
 
-static const MethodParameter* resume_params[] = {
+static const MethodParameter* const resume_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     new EnumParameter("step", false, step_enum_names),
     new UIntParameter("frameIndex", false),
@@ -3993,7 +3997,7 @@ static void Resume(Thread* thread, JSONStream* js) {
   PrintSuccess(js);
 }
 
-static const MethodParameter* kill_params[] = {
+static const MethodParameter* const kill_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     NULL,
 };
@@ -4007,7 +4011,7 @@ static void Kill(Thread* thread, JSONStream* js) {
   PrintSuccess(js);
 }
 
-static const MethodParameter* pause_params[] = {
+static const MethodParameter* const pause_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     NULL,
 };
@@ -4023,7 +4027,7 @@ static void Pause(Thread* thread, JSONStream* js) {
   PrintSuccess(js);
 }
 
-static const MethodParameter* enable_profiler_params[] = {
+static const MethodParameter* const enable_profiler_params[] = {
     NULL,
 };
 
@@ -4035,7 +4039,7 @@ static void EnableProfiler(Thread* thread, JSONStream* js) {
   PrintSuccess(js);
 }
 
-static const MethodParameter* get_tag_profile_params[] = {
+static const MethodParameter* const get_tag_profile_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     NULL,
 };
@@ -4046,7 +4050,7 @@ static void GetTagProfile(Thread* thread, JSONStream* js) {
   thread->isolate()->vm_tag_counters()->PrintToJSONObject(&miniProfile);
 }
 
-static const MethodParameter* get_cpu_samples_params[] = {
+static const MethodParameter* const get_cpu_samples_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     new Int64Parameter("timeOriginMicros", false),
     new Int64Parameter("timeExtentMicros", false),
@@ -4067,7 +4071,7 @@ static void GetCpuSamples(Thread* thread, JSONStream* js) {
                              include_code_samples);
 }
 
-static const MethodParameter* get_allocation_traces_params[] = {
+static const MethodParameter* const get_allocation_traces_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     new IdParameter("classId", false),
     new Int64Parameter("timeOriginMicros", false),
@@ -4107,7 +4111,7 @@ static void GetAllocationTraces(Thread* thread, JSONStream* js) {
   }
 }
 
-static const MethodParameter* get_native_allocation_samples_params[] = {
+static const MethodParameter* const get_native_allocation_samples_params[] = {
     NO_ISOLATE_PARAMETER,
     new Int64Parameter("timeOriginMicros", false),
     new Int64Parameter("timeExtentMicros", false),
@@ -4131,7 +4135,7 @@ static void GetNativeAllocationSamples(Thread* thread, JSONStream* js) {
       js, time_origin_micros, time_extent_micros, include_code_samples);
 }
 
-static const MethodParameter* clear_cpu_samples_params[] = {
+static const MethodParameter* const clear_cpu_samples_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     NULL,
 };
@@ -4173,7 +4177,7 @@ static void GetAllocationProfileImpl(Thread* thread,
   isolate_group->class_table()->AllocationProfilePrintJSON(js, internal);
 }
 
-static const MethodParameter* get_allocation_profile_params[] = {
+static const MethodParameter* const get_allocation_profile_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     NULL,
 };
@@ -4186,7 +4190,7 @@ static void GetAllocationProfile(Thread* thread, JSONStream* js) {
   GetAllocationProfileImpl(thread, js, true);
 }
 
-static const MethodParameter* collect_all_garbage_params[] = {
+static const MethodParameter* const collect_all_garbage_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     NULL,
 };
@@ -4197,7 +4201,7 @@ static void CollectAllGarbage(Thread* thread, JSONStream* js) {
   PrintSuccess(js);
 }
 
-static const MethodParameter* get_heap_map_params[] = {
+static const MethodParameter* const get_heap_map_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     NULL,
 };
@@ -4220,7 +4224,7 @@ static void GetHeapMap(Thread* thread, JSONStream* js) {
   isolate_group->heap()->PrintHeapMapToJSONStream(isolate_group, js);
 }
 
-static const MethodParameter* request_heap_snapshot_params[] = {
+static const MethodParameter* const request_heap_snapshot_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     NULL,
 };
@@ -4233,6 +4237,70 @@ static void RequestHeapSnapshot(Thread* thread, JSONStream* js) {
   // TODO(koda): Provide some id that ties this request to async response(s).
   PrintSuccess(js);
 }
+
+#if defined(DART_HOST_OS_LINUX) || defined(DART_HOST_OS_ANDROID)
+struct VMMapping {
+  char path[256];
+  size_t size;
+};
+
+static void AddVMMappings(JSONArray* rss_children) {
+  FILE* fp = fopen("/proc/self/smaps", "r");
+  if (fp == nullptr) {
+    return;
+  }
+
+  MallocGrowableArray<VMMapping> mappings(10);
+  char line[256];
+  char path[256];
+  char property[32];
+  size_t start, end, size;
+  while (fgets(line, sizeof(line), fp) != nullptr) {
+    if (sscanf(line, "%zx-%zx", &start, &end) == 2) {
+      // Mapping line.
+      strncpy(path, strrchr(line, ' ') + 1, sizeof(path) - 1);
+      int len = strlen(path);
+      if ((len > 0) && path[len - 1] == '\n') {
+        path[len - 1] = 0;
+      }
+    } else if (sscanf(line, "%s%zd", property, &size) == 2) {
+      // Property line.
+      // Skipping a few paths to avoid double counting:
+      // (deleted) - memfd dual mapping in Dart heap
+      // [heap] - sbrk area, should already included with malloc
+      // <empty> - anonymous mappings, mostly in Dart heap
+      if ((strcmp(property, "Rss:") == 0) && (size != 0) &&
+          (strcmp(path, "(deleted)") != 0) && (strcmp(path, "[heap]") != 0) &&
+          (strcmp(path, "") != 0)) {
+        bool updated = false;
+        for (intptr_t i = 0; i < mappings.length(); i++) {
+          if (strcmp(mappings[i].path, path) == 0) {
+            mappings[i].size += size;
+            updated = true;
+            break;
+          }
+        }
+        if (!updated) {
+          VMMapping mapping;
+          strncpy(mapping.path, path, sizeof(mapping.path));
+          mapping.size = size;
+          mappings.Add(mapping);
+        }
+      }
+    }
+  }
+  fclose(fp);
+
+  for (intptr_t i = 0; i < mappings.length(); i++) {
+    JSONObject mapping(rss_children);
+    mapping.AddProperty("name", mappings[i].path);
+    mapping.AddProperty("description",
+                        "Mapped file / shared library / executable");
+    mapping.AddProperty64("size", mappings[i].size * KB);
+    JSONArray(&mapping, "children");
+  }
+}
+#endif
 
 static intptr_t GetProcessMemoryUsageHelper(JSONStream* js) {
   JSONObject response(js);
@@ -4335,6 +4403,8 @@ static intptr_t GetProcessMemoryUsageHelper(JSONStream* js) {
     vm.AddProperty64("size", vm_size);
   }
 
+  // On Android, malloc is better labeled by /proc/self/smaps.
+#if !defined(DART_HOST_OS_ANDROID)
   intptr_t used, capacity;
   const char* implementation;
   if (MallocHooks::GetStats(&used, &capacity, &implementation)) {
@@ -4360,11 +4430,17 @@ static intptr_t GetProcessMemoryUsageHelper(JSONStream* js) {
       JSONArray(&malloc_free, "children");
     }
   }
+#endif
+
+#if defined(DART_HOST_OS_LINUX) || defined(DART_HOST_OS_ANDROID)
+  AddVMMappings(&rss_children);
+#endif
+  // TODO(46166): Implement for other operating systems.
 
   return vm_size;
 }
 
-static const MethodParameter* get_process_memory_usage_params[] = {
+static const MethodParameter* const get_process_memory_usage_params[] = {
     NULL,
 };
 
@@ -4433,7 +4509,7 @@ void Service::SendExtensionEvent(Isolate* isolate,
   Service::HandleEvent(&event);
 }
 
-static const MethodParameter* get_persistent_handles_params[] = {
+static const MethodParameter* const get_persistent_handles_params[] = {
     ISOLATE_PARAMETER,
     NULL,
 };
@@ -4521,7 +4597,7 @@ static void GetPersistentHandles(Thread* thread, JSONStream* js) {
   }
 }
 
-static const MethodParameter* get_ports_private_params[] = {
+static const MethodParameter* const get_ports_private_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     NULL,
 };
@@ -4547,7 +4623,7 @@ static void RespondWithMalformedObject(Thread* thread, JSONStream* js) {
   jsobj.AddProperty("bart", "simpson");
 }
 
-static const MethodParameter* get_object_params[] = {
+static const MethodParameter* const get_object_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     new UIntParameter("offset", false),
     new UIntParameter("count", false),
@@ -4620,7 +4696,7 @@ static void GetObject(Thread* thread, JSONStream* js) {
   PrintInvalidParamError(js, "objectId");
 }
 
-static const MethodParameter* get_object_store_params[] = {
+static const MethodParameter* const get_object_store_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     NULL,
 };
@@ -4630,7 +4706,7 @@ static void GetObjectStore(Thread* thread, JSONStream* js) {
   thread->isolate_group()->object_store()->PrintToJSONObject(&jsobj);
 }
 
-static const MethodParameter* get_isolate_object_store_params[] = {
+static const MethodParameter* const get_isolate_object_store_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     NULL,
 };
@@ -4640,7 +4716,7 @@ static void GetIsolateObjectStore(Thread* thread, JSONStream* js) {
   thread->isolate()->isolate_object_store()->PrintToJSONObject(&jsobj);
 }
 
-static const MethodParameter* get_class_list_params[] = {
+static const MethodParameter* const get_class_list_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     NULL,
 };
@@ -4651,7 +4727,7 @@ static void GetClassList(Thread* thread, JSONStream* js) {
   table->PrintToJSONObject(&jsobj);
 }
 
-static const MethodParameter* get_type_arguments_list_params[] = {
+static const MethodParameter* const get_type_arguments_list_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     NULL,
 };
@@ -4687,7 +4763,7 @@ static void GetTypeArgumentsList(Thread* thread, JSONStream* js) {
   typeargs_table.Release();
 }
 
-static const MethodParameter* get_version_params[] = {
+static const MethodParameter* const get_version_params[] = {
     NO_ISOLATE_PARAMETER,
     NULL,
 };
@@ -4734,7 +4810,7 @@ class SystemServiceIsolateVisitor : public IsolateVisitor {
   JSONArray* jsarr_;
 };
 
-static const MethodParameter* get_vm_params[] = {
+static const MethodParameter* const get_vm_params[] = {
     NO_ISOLATE_PARAMETER,
     NULL,
 };
@@ -4831,7 +4907,7 @@ static void GetVM(Thread* thread, JSONStream* js) {
   Service::PrintJSONForVM(js, false);
 }
 
-static const char* exception_pause_mode_names[] = {
+static const char* const exception_pause_mode_names[] = {
     "All",
     "None",
     "Unhandled",
@@ -4845,7 +4921,7 @@ static Dart_ExceptionPauseInfo exception_pause_mode_values[] = {
     kInvalidExceptionPauseInfo,
 };
 
-static const MethodParameter* set_exception_pause_mode_params[] = {
+static const MethodParameter* const set_exception_pause_mode_params[] = {
     ISOLATE_PARAMETER,
     new EnumParameter("mode", true, exception_pause_mode_names),
     NULL,
@@ -4872,7 +4948,7 @@ static void SetExceptionPauseMode(Thread* thread, JSONStream* js) {
   PrintSuccess(js);
 }
 
-static const MethodParameter* set_breakpoint_state_params[] = {
+static const MethodParameter* const set_breakpoint_state_params[] = {
     ISOLATE_PARAMETER,
     new IdParameter("breakpointId", true),
     new BoolParameter("enable", true),
@@ -4901,7 +4977,7 @@ static void SetBreakpointState(Thread* thread, JSONStream* js) {
   bpt->PrintJSON(js);
 }
 
-static const MethodParameter* get_flag_list_params[] = {
+static const MethodParameter* const get_flag_list_params[] = {
     NO_ISOLATE_PARAMETER,
     NULL,
 };
@@ -4910,7 +4986,7 @@ static void GetFlagList(Thread* thread, JSONStream* js) {
   Flags::PrintJSON(js);
 }
 
-static const MethodParameter* set_flags_params[] = {
+static const MethodParameter* const set_flags_params[] = {
     NO_ISOLATE_PARAMETER,
     NULL,
 };
@@ -4989,7 +5065,7 @@ static void SetFlag(Thread* thread, JSONStream* js) {
   }
 }
 
-static const MethodParameter* set_library_debuggable_params[] = {
+static const MethodParameter* const set_library_debuggable_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     new IdParameter("libraryId", true),
     new BoolParameter("isDebuggable", true),
@@ -5012,7 +5088,7 @@ static void SetLibraryDebuggable(Thread* thread, JSONStream* js) {
   PrintInvalidParamError(js, "libraryId");
 }
 
-static const MethodParameter* set_name_params[] = {
+static const MethodParameter* const set_name_params[] = {
     ISOLATE_PARAMETER,
     new MethodParameter("name", true),
     NULL,
@@ -5029,7 +5105,7 @@ static void SetName(Thread* thread, JSONStream* js) {
   return;
 }
 
-static const MethodParameter* set_vm_name_params[] = {
+static const MethodParameter* const set_vm_name_params[] = {
     NO_ISOLATE_PARAMETER,
     new MethodParameter("name", true),
     NULL,
@@ -5047,7 +5123,7 @@ static void SetVMName(Thread* thread, JSONStream* js) {
   return;
 }
 
-static const MethodParameter* set_trace_class_allocation_params[] = {
+static const MethodParameter* const set_trace_class_allocation_params[] = {
     RUNNABLE_ISOLATE_PARAMETER,
     new IdParameter("classId", true),
     new BoolParameter("enable", true),
@@ -5074,7 +5150,7 @@ static void SetTraceClassAllocation(Thread* thread, JSONStream* js) {
   PrintSuccess(js);
 }
 
-static const MethodParameter* get_default_classes_aliases_params[] = {
+static const MethodParameter* const get_default_classes_aliases_params[] = {
     NO_ISOLATE_PARAMETER,
     NULL,
 };

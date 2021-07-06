@@ -15,6 +15,82 @@ enum NullSafetyMode {
   sound,
 }
 
+enum FeatureStatus {
+  shipping,
+  canary,
+}
+
+/// A [FeatureOption] is both a set of flags and an option. By default, creating
+/// a [FeatureOption] will create two flags, [--$flag] and [--no-$flag]. The
+/// default behavior for a [FeatureOption] in the [canary] set is to be
+/// disabled by default unless explicity enabled or [--canary] is passed.
+/// When the [FeatureOption] is moved to [staging], the behavior flips, and by
+/// default it is enabled unless explicitly disabled or [--no-shipping] is
+/// passed. The [isNegativeFlag] bool flips things around so while in [canary]
+/// the [FeatureOption] is enabled unless explicitly disabled, and while in
+/// [staging] it is disabled unless explicitly enabled.
+class FeatureOption {
+  final String flag;
+  final bool isNegativeFlag;
+  bool _state;
+  bool get isEnabled => _state;
+  bool get isDisabled => !isEnabled;
+  void set state(bool value) {
+    assert(_state == null);
+    _state = value;
+  }
+
+  void set override(bool value) {
+    assert(_state != null);
+    _state = value;
+  }
+
+  FeatureOption(this.flag, {this.isNegativeFlag = false});
+}
+
+/// A class to simplify management of features which will end up being enabled
+/// by default. New features should be added as properties, and then to the
+/// [canary] list. Features in [canary] default to disabled unless they are
+/// explicitly enabled or unless `--canary` is passed on the commandline. When
+/// a feature is ready to ship, it should be moved to the [shipping] list,
+/// whereupon it will immediately default to enabled but can still be disabled.
+/// Once a feature is shipped, it can be deleted from this class entirely.
+class FeatureOptions {
+  /// Whether to restrict the generated JavaScript to features that work on the
+  /// oldest supported versions of JavaScript. This currently means IE11. If
+  /// `true`, the generated code runs on the legacy JavaScript platform. If
+  /// `false`, the code will fail on the legacy JavaScript platform.
+  FeatureOption legacyJavaScript =
+      FeatureOption('legacy-javascript', isNegativeFlag: true);
+
+  /// Whether to use optimized holders.
+  FeatureOption newHolders = FeatureOption('new-holders');
+
+  /// [FeatureOption]s which default to enabled.
+  List<FeatureOption> shipping;
+
+  /// [FeatureOption]s which default to disabled.
+  List<FeatureOption> canary;
+
+  /// Forces canary feature on. This must run after [Option].parse.
+  void forceCanary() {
+    for (var feature in canary) {
+      feature.override = feature.isNegativeFlag ? false : true;
+    }
+  }
+
+  // Initialize feature lists.
+  FeatureOptions() {
+    shipping = [];
+    canary = [legacyJavaScript, newHolders];
+  }
+
+  void parse(List<String> options) {
+    _extractFeatures(options, shipping, FeatureStatus.shipping);
+    _extractFeatures(options, canary, FeatureStatus.canary);
+  }
+}
+
 /// Options used for controlling diagnostic messages.
 abstract class DiagnosticOptions {
   const DiagnosticOptions();
@@ -183,6 +259,9 @@ class CompilerOptions implements DiagnosticOptions {
   /// checkLibrary calls are correct.
   bool disableProgramSplit = false;
 
+  // Whether or not to stop compilation after splitting the
+  bool stopAfterProgramSplit = false;
+
   /// Diagnostic option: If `true`, warnings cause the compilation to fail.
   @override
   bool fatalWarnings = false;
@@ -310,14 +389,6 @@ class CompilerOptions implements DiagnosticOptions {
   /// `Object.runtimeType`.
   bool laxRuntimeTypeToString = false;
 
-  /// Whether to restrict the generated JavaScript to features that work on the
-  /// oldest supported versions of JavaScript. This currently means IE11. If
-  /// `true`, the generated code runs on the legacy JavaScript platform. If
-  /// `false`, the code will fail on the legacy JavaScript platform.
-  bool legacyJavaScript = true; // default value.
-  bool _legacyJavaScript = false;
-  bool _noLegacyJavaScript = false;
-
   /// What should the compiler do with parameter type assertions.
   ///
   /// This is an internal configuration option derived from other flags.
@@ -400,6 +471,10 @@ class CompilerOptions implements DiagnosticOptions {
   /// called.
   bool experimentCallInstrumentation = false;
 
+  /// Use the dart2js lowering of late instance variables rather than the CFE
+  /// lowering.
+  bool experimentLateInstanceVariables = false;
+
   /// When null-safety is enabled, whether the compiler should emit code with
   /// unsound or sound semantics.
   ///
@@ -445,16 +520,21 @@ class CompilerOptions implements DiagnosticOptions {
   /// Verbosity level used for filtering messages during compilation.
   fe.Verbosity verbosity = fe.Verbosity.all;
 
+  FeatureOptions features;
+
   // -------------------------------------------------
   // Options for deprecated features
   // -------------------------------------------------
 
   /// Create an options object by parsing flags from [options].
   static CompilerOptions parse(List<String> options,
-      {Uri librariesSpecificationUri,
+      {FeatureOptions featureOptions,
+      Uri librariesSpecificationUri,
       Uri platformBinaries,
       void Function(String) onError,
       void Function(String) onWarning}) {
+    if (featureOptions == null) featureOptions = FeatureOptions();
+    featureOptions.parse(options);
     Map<fe.ExperimentalFlag, bool> explicitExperimentalFlags =
         _extractExperiments(options, onError: onError, onWarning: onWarning);
 
@@ -462,7 +542,7 @@ class CompilerOptions implements DiagnosticOptions {
     // for compiling user code vs. the sdk. To simplify things, we prebuild the
     // sdk with the correct flags.
     platformBinaries ??= fe.computePlatformBinariesLocation();
-    return new CompilerOptions()
+    return CompilerOptions()
       ..librariesSpecificationUri = librariesSpecificationUri
       ..allowMockCompilation = _hasOption(options, Flags.allowMockCompilation)
       ..benchmarkingProduction =
@@ -484,6 +564,7 @@ class CompilerOptions implements DiagnosticOptions {
       ..explicitExperimentalFlags = explicitExperimentalFlags
       ..disableInlining = _hasOption(options, Flags.disableInlining)
       ..disableProgramSplit = _hasOption(options, Flags.disableProgramSplit)
+      ..stopAfterProgramSplit = _hasOption(options, Flags.stopAfterProgramSplit)
       ..disableTypeInference = _hasOption(options, Flags.disableTypeInference)
       ..useTrivialAbstractValueDomain =
           _hasOption(options, Flags.useTrivialAbstractValueDomain)
@@ -518,6 +599,8 @@ class CompilerOptions implements DiagnosticOptions {
           _hasOption(options, Flags.experimentUnreachableMethodsThrow)
       ..experimentCallInstrumentation =
           _hasOption(options, Flags.experimentCallInstrumentation)
+      ..experimentLateInstanceVariables =
+          _hasOption(options, Flags.experimentLateInstanceVariables)
       ..generateSourceMap = !_hasOption(options, Flags.noSourceMaps)
       ..outputUri = _extractUriOption(options, '--out=')
       ..platformBinaries = platformBinaries
@@ -527,8 +610,6 @@ class CompilerOptions implements DiagnosticOptions {
       ..omitAsCasts = _hasOption(options, Flags.omitAsCasts)
       ..laxRuntimeTypeToString =
           _hasOption(options, Flags.laxRuntimeTypeToString)
-      .._legacyJavaScript = _hasOption(options, Flags.legacyJavaScript)
-      .._noLegacyJavaScript = _hasOption(options, Flags.noLegacyJavaScript)
       ..testMode = _hasOption(options, Flags.testMode)
       ..trustPrimitives = _hasOption(options, Flags.trustPrimitives)
       ..useContentSecurityPolicy =
@@ -567,7 +648,8 @@ class CompilerOptions implements DiagnosticOptions {
       ..verbosity = fe.Verbosity.parseArgument(
           _extractStringOption(
               options, '${Flags.verbosity}=', fe.Verbosity.defaultValue),
-          onError: onError);
+          onError: onError)
+      ..features = featureOptions;
   }
 
   void validate() {
@@ -587,10 +669,6 @@ class CompilerOptions implements DiagnosticOptions {
     if (platformBinaries == null &&
         equalMaps(experimentalFlags, fe.defaultExperimentalFlags)) {
       throw new ArgumentError("Missing required ${Flags.platformBinaries}");
-    }
-    if (_legacyJavaScript && _noLegacyJavaScript) {
-      throw ArgumentError("'${Flags.legacyJavaScript}' incompatible with "
-          "'${Flags.noLegacyJavaScript}'");
     }
     if (_soundNullSafety && _noSoundNullSafety) {
       throw ArgumentError("'${Flags.soundNullSafety}' incompatible with "
@@ -616,10 +694,8 @@ class CompilerOptions implements DiagnosticOptions {
       // Set flags implied by '--benchmarking-x'.
       // TODO(sra): Use this for some NNBD variant.
       useContentSecurityPolicy = true;
+      features.forceCanary();
     }
-
-    if (_noLegacyJavaScript) legacyJavaScript = false;
-    if (_legacyJavaScript) legacyJavaScript = true;
 
     if (_soundNullSafety) nullSafetyMode = NullSafetyMode.sound;
     if (_noSoundNullSafety) nullSafetyMode = NullSafetyMode.unsound;
@@ -784,6 +860,27 @@ Map<fe.ExperimentalFlag, bool> _extractExperiments(List<String> options,
   onWarning ??= (String warning) => print(warning);
   return fe.parseExperimentalFlags(fe.parseExperimentalArguments(experiments),
       onError: onError, onWarning: onWarning);
+}
+
+void _extractFeatures(
+    List<String> options, List<FeatureOption> features, FeatureStatus status) {
+  bool hasCanaryFlag = _hasOption(options, Flags.canary);
+  bool hasNoShippingFlag = _hasOption(options, Flags.noShipping);
+  for (var feature in features) {
+    String featureFlag = feature.flag;
+    String enableFeatureFlag = '--${featureFlag}';
+    String disableFeatureFlag = '--no-$featureFlag';
+    bool enableFeature = _hasOption(options, enableFeatureFlag);
+    bool disableFeature = _hasOption(options, disableFeatureFlag);
+    if (enableFeature && disableFeature) {
+      throw ArgumentError("'$enableFeatureFlag' incompatible with "
+          "'$disableFeatureFlag'");
+    }
+    bool globalEnable = hasCanaryFlag ||
+        (status == FeatureStatus.shipping && !hasNoShippingFlag);
+    globalEnable = feature.isNegativeFlag ? !globalEnable : globalEnable;
+    feature.state = (enableFeature || globalEnable) && !disableFeature;
+  }
 }
 
 const String _UNDETERMINED_BUILD_ID = "build number could not be determined";

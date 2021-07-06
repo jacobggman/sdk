@@ -999,6 +999,8 @@ LocationSummary* AllocateClosureInstr::MakeLocationSummary(Zone* zone,
       LocationSummary(zone, kNumInputs, kNumTemps, LocationSummary::kCall);
   locs->set_in(kFunctionPos,
                Location::RegisterLocation(AllocateClosureABI::kFunctionReg));
+  locs->set_in(kContextPos,
+               Location::RegisterLocation(AllocateClosureABI::kContextReg));
   locs->set_out(0, Location::RegisterLocation(AllocateClosureABI::kResultReg));
   return locs;
 }
@@ -1147,7 +1149,7 @@ bool LoadStaticFieldInstr::AttributesEqual(const Instruction& other) const {
   return field().ptr() == other.AsLoadStaticField()->field().ptr();
 }
 
-bool LoadStaticFieldInstr::IsFieldInitialized(Instance* field_value) const {
+bool LoadStaticFieldInstr::IsFieldInitialized(Object* field_value) const {
   if (FLAG_fields_may_be_reset) {
     return false;
   }
@@ -1168,7 +1170,7 @@ bool LoadStaticFieldInstr::IsFieldInitialized(Instance* field_value) const {
     return false;
   }
   if (field_value == nullptr) {
-    field_value = &Instance::Handle();
+    field_value = &Object::Handle();
   }
   *field_value = only_isolate->field_table()->At(field.field_id());
   return (field_value->ptr() != Object::sentinel().ptr()) &&
@@ -1201,11 +1203,6 @@ ConstantInstr::ConstantInstr(const Object& value,
   // them here.
   if (!value.IsNull() && !value.IsSmi() && value.IsInstance() &&
       !value.IsCanonical() && (value.ptr() != Object::sentinel().ptr())) {
-    // The only allowed type for which IsCanonical() never answers true is
-    // TypeParameter. (They are treated as canonical due to how they are
-    // created, but there is no way to canonicalize a new TypeParameter
-    // instance containing the same information as an existing instance.)
-    //
     // Arrays in ConstantInstrs are usually immutable and canonicalized, but
     // there are at least a couple of cases where one or both is not true:
     //
@@ -1224,8 +1221,7 @@ ConstantInstr::ConstantInstr(const Object& value,
     //
     // LibraryPrefixes are also never canonicalized since their equality is
     // their identity.
-    ASSERT(value.IsTypeParameter() || value.IsArray() || value.IsTypedData() ||
-           value.IsLibraryPrefix());
+    ASSERT(value.IsArray() || value.IsTypedData() || value.IsLibraryPrefix());
   }
 #endif
 }
@@ -2681,67 +2677,6 @@ Instruction* CheckStackOverflowInstr::Canonicalize(FlowGraph* flow_graph) {
   return this;
 }
 
-bool LoadFieldInstr::IsImmutableLengthLoad() const {
-  switch (slot().kind()) {
-    case Slot::Kind::kArray_length:
-    case Slot::Kind::kTypedDataBase_length:
-    case Slot::Kind::kString_length:
-    case Slot::Kind::kTypeArguments_length:
-      return true;
-    case Slot::Kind::kGrowableObjectArray_length:
-      return false;
-
-    // Not length loads.
-#define UNBOXED_NATIVE_SLOT_CASE(Class, Untagged, Field, Rep, IsFinal)         \
-  case Slot::Kind::k##Class##_##Field:
-      UNBOXED_NATIVE_SLOTS_LIST(UNBOXED_NATIVE_SLOT_CASE)
-#undef UNBOXED_NATIVE_SLOT_CASE
-    case Slot::Kind::kLinkedHashMap_index:
-    case Slot::Kind::kLinkedHashMap_data:
-    case Slot::Kind::kLinkedHashMap_hash_mask:
-    case Slot::Kind::kLinkedHashMap_used_data:
-    case Slot::Kind::kLinkedHashMap_deleted_keys:
-    case Slot::Kind::kArgumentsDescriptor_type_args_len:
-    case Slot::Kind::kArgumentsDescriptor_positional_count:
-    case Slot::Kind::kArgumentsDescriptor_count:
-    case Slot::Kind::kArgumentsDescriptor_size:
-    case Slot::Kind::kArrayElement:
-    case Slot::Kind::kTypeArguments:
-    case Slot::Kind::kTypedDataView_offset_in_bytes:
-    case Slot::Kind::kTypedDataView_data:
-    case Slot::Kind::kGrowableObjectArray_data:
-    case Slot::Kind::kContext_parent:
-    case Slot::Kind::kClosure_context:
-    case Slot::Kind::kClosure_delayed_type_arguments:
-    case Slot::Kind::kClosure_function:
-    case Slot::Kind::kClosure_function_type_arguments:
-    case Slot::Kind::kClosure_instantiator_type_arguments:
-    case Slot::Kind::kClosure_hash:
-    case Slot::Kind::kCapturedVariable:
-    case Slot::Kind::kDartField:
-    case Slot::Kind::kFunction_data:
-    case Slot::Kind::kFunction_signature:
-    case Slot::Kind::kFunctionType_parameter_names:
-    case Slot::Kind::kFunctionType_parameter_types:
-    case Slot::Kind::kFunctionType_type_parameters:
-    case Slot::Kind::kPointerBase_data_field:
-    case Slot::Kind::kType_arguments:
-    case Slot::Kind::kTypeArgumentsIndex:
-    case Slot::Kind::kTypeParameters_names:
-    case Slot::Kind::kTypeParameters_flags:
-    case Slot::Kind::kTypeParameters_bounds:
-    case Slot::Kind::kTypeParameters_defaults:
-    case Slot::Kind::kTypeParameter_bound:
-    case Slot::Kind::kUnhandledException_exception:
-    case Slot::Kind::kUnhandledException_stacktrace:
-    case Slot::Kind::kWeakProperty_key:
-    case Slot::Kind::kWeakProperty_value:
-      return false;
-  }
-  UNREACHABLE();
-  return false;
-}
-
 bool LoadFieldInstr::IsFixedLengthArrayCid(intptr_t cid) {
   if (IsTypedDataClassId(cid) || IsExternalTypedDataClassId(cid)) {
     return true;
@@ -2967,7 +2902,7 @@ Definition* LoadFieldInstr::Canonicalize(FlowGraph* flow_graph) {
           break;
       }
     } else if (CreateArrayInstr* create_array = array->AsCreateArray()) {
-      return create_array->element_type()->definition();
+      return create_array->type_arguments()->definition();
     } else if (LoadFieldInstr* load_array = array->AsLoadField()) {
       const Slot& slot = load_array->slot();
       switch (slot.kind()) {
@@ -3268,6 +3203,12 @@ Definition* UnboxIntegerInstr::Canonicalize(FlowGraph* flow_graph) {
       flow_graph->InsertBefore(this, converter, env(), FlowGraph::kValue);
       return converter;
     }
+  }
+
+  if ((speculative_mode_ == kGuardInputs) && !ComputeCanDeoptimize()) {
+    // Remember if we ever learn out input doesn't require checking, as
+    // the input Value might be later changed that would make us forget.
+    speculative_mode_ = kNotSpeculative;
   }
 
   return this;
@@ -3794,13 +3735,20 @@ bool CheckNullInstr::AttributesEqual(const Instruction& other) const {
 BoxInstr* BoxInstr::Create(Representation from, Value* value) {
   switch (from) {
     case kUnboxedUint8:
-      return new BoxUint8Instr(value);
+    case kUnboxedUint16:
+#if defined(TARGET_ARCH_IS_64_BIT) && !defined(DART_COMPRESSED_POINTERS)
+    case kUnboxedInt32:
+    case kUnboxedUint32:
+#endif
+      return new BoxSmallIntInstr(from, value);
 
+#if defined(TARGET_ARCH_IS_32_BIT) || defined(DART_COMPRESSED_POINTERS)
     case kUnboxedInt32:
       return new BoxInt32Instr(value);
 
     case kUnboxedUint32:
       return new BoxUint32Instr(value);
+#endif
 
     case kUnboxedInt64:
       return new BoxInt64Instr(value);
@@ -4667,6 +4615,28 @@ void DropTempsInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
   __ Drop(num_temps());
 }
 
+LocationSummary* BoxSmallIntInstr::MakeLocationSummary(Zone* zone,
+                                                       bool opt) const {
+  ASSERT(RepresentationUtils::ValueSize(from_representation()) * kBitsPerByte <=
+         compiler::target::kSmiBits);
+  const intptr_t kNumInputs = 1;
+  const intptr_t kNumTemps = 0;
+  LocationSummary* summary = new (zone)
+      LocationSummary(zone, kNumInputs, kNumTemps, LocationSummary::kNoCall);
+  summary->set_in(0, Location::RequiresRegister());
+  summary->set_out(0, Location::RequiresRegister());
+  return summary;
+}
+
+void BoxSmallIntInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+  const Register value = locs()->in(0).reg();
+  const Register out = locs()->out(0).reg();
+  ASSERT(value != out);
+
+  __ ExtendAndSmiTagValue(
+      out, value, RepresentationUtils::OperandSize(from_representation()));
+}
+
 StrictCompareInstr::StrictCompareInstr(const InstructionSource& source,
                                        Token::Kind kind,
                                        Value* left,
@@ -5024,7 +4994,7 @@ void DispatchTableCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
   }
   compiler->EmitDispatchTableCall(selector()->offset, arguments_descriptor);
   compiler->EmitCallsiteMetadata(source(), DeoptId::kNone,
-                                 UntaggedPcDescriptors::kOther, locs());
+                                 UntaggedPcDescriptors::kOther, locs(), env());
   if (selector()->called_on_null && !selector()->on_null_interface) {
     Value* receiver = ArgumentValueAt(FirstArgIndex());
     if (receiver->Type()->is_nullable()) {
@@ -5273,8 +5243,96 @@ bool StaticCallInstr::InitResultType(Zone* zone) {
   return false;
 }
 
+static const String& EvaluateToString(Zone* zone, Definition* defn) {
+  if (auto konst = defn->AsConstant()) {
+    const Object& obj = konst->value();
+    if (obj.IsString()) {
+      return String::Cast(obj);
+    } else if (obj.IsSmi()) {
+      const char* cstr = obj.ToCString();
+      return String::Handle(zone, String::New(cstr, Heap::kOld));
+    } else if (obj.IsBool()) {
+      return Bool::Cast(obj).value() ? Symbols::True() : Symbols::False();
+    } else if (obj.IsNull()) {
+      return Symbols::null();
+    }
+  }
+  return String::null_string();
+}
+
+static Definition* CanonicalizeStringInterpolate(StaticCallInstr* call,
+                                                 FlowGraph* flow_graph) {
+  auto arg0 = call->ArgumentValueAt(0)->definition();
+  auto create_array = arg0->AsCreateArray();
+  if (create_array == nullptr) {
+    // Do not try to fold interpolate if array is an OSR argument.
+    ASSERT(flow_graph->IsCompiledForOsr());
+    ASSERT(arg0->IsPhi() || arg0->IsParameter());
+    return call;
+  }
+  // Check if the string interpolation has only constant inputs.
+  Value* num_elements = create_array->num_elements();
+  if (!num_elements->BindsToConstant() ||
+      !num_elements->BoundConstant().IsSmi()) {
+    return call;
+  }
+  const intptr_t length = Smi::Cast(num_elements->BoundConstant()).Value();
+  Thread* thread = Thread::Current();
+  Zone* zone = thread->zone();
+  GrowableHandlePtrArray<const String> pieces(zone, length);
+  for (intptr_t i = 0; i < length; i++) {
+    pieces.Add(Object::null_string());
+  }
+
+  for (Value::Iterator it(create_array->input_use_list()); !it.Done();
+       it.Advance()) {
+    auto current = it.Current()->instruction();
+    if (current == call) {
+      continue;
+    }
+    auto store = current->AsStoreIndexed();
+    if (store == nullptr || !store->index()->BindsToConstant() ||
+        !store->index()->BoundConstant().IsSmi()) {
+      return call;
+    }
+    intptr_t store_index = Smi::Cast(store->index()->BoundConstant()).Value();
+    ASSERT(store_index < length);
+    const String& piece =
+        EvaluateToString(flow_graph->zone(), store->value()->definition());
+    if (!piece.IsNull()) {
+      pieces.SetAt(store_index, piece);
+    } else {
+      return call;
+    }
+  }
+
+  const String& concatenated =
+      String::ZoneHandle(zone, Symbols::FromConcatAll(thread, pieces));
+  return flow_graph->GetConstant(concatenated);
+}
+
+static Definition* CanonicalizeStringInterpolateSingle(StaticCallInstr* call,
+                                                       FlowGraph* flow_graph) {
+  auto arg0 = call->ArgumentValueAt(0)->definition();
+  const auto& result = EvaluateToString(flow_graph->zone(), arg0);
+  if (!result.IsNull()) {
+    return flow_graph->GetConstant(String::ZoneHandle(
+        flow_graph->zone(), Symbols::New(flow_graph->thread(), result)));
+  }
+  return call;
+}
+
 Definition* StaticCallInstr::Canonicalize(FlowGraph* flow_graph) {
-  if (!CompilerState::Current().is_aot()) {
+  auto& compiler_state = CompilerState::Current();
+
+  if (function().ptr() == compiler_state.StringBaseInterpolate().ptr()) {
+    return CanonicalizeStringInterpolate(this, flow_graph);
+  } else if (function().ptr() ==
+             compiler_state.StringBaseInterpolateSingle().ptr()) {
+    return CanonicalizeStringInterpolateSingle(this, flow_graph);
+  }
+
+  if (!compiler_state.is_aot()) {
     return this;
   }
 
@@ -5742,6 +5800,7 @@ Environment* Environment::DeepCopy(Zone* zone, intptr_t length) const {
       length, fixed_parameter_count_, LazyDeoptPruneCount(), parsed_function_,
       (outer_ == NULL) ? NULL : outer_->DeepCopy(zone));
   copy->SetDeoptId(DeoptIdBits::decode(bitfield_));
+  copy->SetLazyDeoptToBeforeDeoptId(LazyDeoptToBeforeDeoptId());
   if (locations_ != NULL) {
     Location* new_locations = zone->Alloc<Location>(length);
     copy->set_locations(new_locations);
@@ -5991,101 +6050,6 @@ intptr_t CheckArrayBoundInstr::LengthOffsetFor(intptr_t class_id) {
       UNREACHABLE();
       return -1;
   }
-}
-
-const Function& StringInterpolateInstr::CallFunction() const {
-  if (function_.IsNull()) {
-    const int kTypeArgsLen = 0;
-    const int kNumberOfArguments = 1;
-    const Array& kNoArgumentNames = Object::null_array();
-    const Class& cls =
-        Class::Handle(Library::LookupCoreClass(Symbols::StringBase()));
-    ASSERT(!cls.IsNull());
-    function_ = Resolver::ResolveStatic(
-        cls, Library::PrivateCoreLibName(Symbols::Interpolate()), kTypeArgsLen,
-        kNumberOfArguments, kNoArgumentNames);
-  }
-  ASSERT(!function_.IsNull());
-  return function_;
-}
-
-// Replace StringInterpolateInstr with a constant string if all inputs are
-// constant of [string, number, boolean, null].
-// Leave the CreateArrayInstr and StoreIndexedInstr in the stream in case
-// deoptimization occurs.
-Definition* StringInterpolateInstr::Canonicalize(FlowGraph* flow_graph) {
-  // The following graph structure is generated by the graph builder:
-  //   v2 <- CreateArray(v0)
-  //   StoreIndexed(v2, v3, v4)   -- v3:constant index, v4: value.
-  //   ..
-  //   v8 <- StringInterpolate(v2)
-
-  // Don't compile-time fold when optimizing the interpolation function itself.
-  if (flow_graph->function().ptr() == CallFunction().ptr()) {
-    return this;
-  }
-
-  CreateArrayInstr* create_array = value()->definition()->AsCreateArray();
-  if (create_array == nullptr) {
-    // Do not try to fold interpolate if array is an OSR argument.
-    ASSERT(flow_graph->IsCompiledForOsr());
-    ASSERT(value()->definition()->IsPhi() ||
-           value()->definition()->IsParameter());
-    return this;
-  }
-  // Check if the string interpolation has only constant inputs.
-  Value* num_elements = create_array->num_elements();
-  if (!num_elements->BindsToConstant() ||
-      !num_elements->BoundConstant().IsSmi()) {
-    return this;
-  }
-  const intptr_t length = Smi::Cast(num_elements->BoundConstant()).Value();
-  Thread* thread = Thread::Current();
-  Zone* zone = thread->zone();
-  GrowableHandlePtrArray<const String> pieces(zone, length);
-  for (intptr_t i = 0; i < length; i++) {
-    pieces.Add(Object::null_string());
-  }
-
-  for (Value::Iterator it(create_array->input_use_list()); !it.Done();
-       it.Advance()) {
-    Instruction* curr = it.Current()->instruction();
-    if (curr == this) continue;
-
-    StoreIndexedInstr* store = curr->AsStoreIndexed();
-    if (store == nullptr || !store->index()->BindsToConstant() ||
-        !store->index()->BoundConstant().IsSmi()) {
-      return this;
-    }
-    intptr_t store_index = Smi::Cast(store->index()->BoundConstant()).Value();
-    ASSERT(store_index < length);
-    ASSERT(store != NULL);
-    if (store->value()->definition()->IsConstant()) {
-      ASSERT(store->index()->BindsToConstant());
-      const Object& obj = store->value()->definition()->AsConstant()->value();
-      // TODO(srdjan): Verify if any other types should be converted as well.
-      if (obj.IsString()) {
-        pieces.SetAt(store_index, String::Cast(obj));
-      } else if (obj.IsSmi()) {
-        const char* cstr = obj.ToCString();
-        pieces.SetAt(store_index,
-                     String::Handle(zone, String::New(cstr, Heap::kOld)));
-      } else if (obj.IsBool()) {
-        pieces.SetAt(store_index, Bool::Cast(obj).value() ? Symbols::True()
-                                                          : Symbols::False());
-      } else if (obj.IsNull()) {
-        pieces.SetAt(store_index, Symbols::null());
-      } else {
-        return this;
-      }
-    } else {
-      return this;
-    }
-  }
-
-  const String& concatenated =
-      String::ZoneHandle(zone, Symbols::FromConcatAll(thread, pieces));
-  return flow_graph->GetConstant(concatenated);
 }
 
 static AlignmentType StrengthenAlignment(intptr_t cid,
@@ -6441,24 +6405,30 @@ Representation FfiCallInstr::RequiredInputRepresentation(intptr_t idx) const {
 
 #define Z zone_
 
-LocationSummary* FfiCallInstr::MakeLocationSummary(Zone* zone,
-                                                   bool is_optimizing) const {
+LocationSummary* FfiCallInstr::MakeLocationSummaryInternal(
+    Zone* zone,
+    bool is_optimizing,
+    const Register temp) const {
   // The temporary register needs to be callee-saved and not an argument
   // register.
   ASSERT(((1 << CallingConventions::kFfiAnyNonAbiRegister) &
           CallingConventions::kArgumentRegisters) == 0);
 
-  constexpr intptr_t kNumTemps = 2;
+  // TODO(dartbug.com/45468): Investigate whether we can avoid spilling
+  // registers across ffi leaf calls by not using `kCall` here.
+  LocationSummary* summary = new (zone) LocationSummary(
+      zone, /*num_inputs=*/InputCount(),
+      /*num_temps=*/temp == kNoRegister ? 2 : 3, LocationSummary::kCall);
 
-  LocationSummary* summary = new (zone)
-      LocationSummary(zone, /*num_inputs=*/InputCount(),
-                      /*num_temps=*/kNumTemps, LocationSummary::kCall);
-
-  const Register temp0 = CallingConventions::kSecondNonArgumentRegister;
-  const Register temp1 = CallingConventions::kFfiAnyNonAbiRegister;
+  const Register temp0 = CallingConventions::kFfiAnyNonAbiRegister;
+  const Register temp1 = CallingConventions::kSecondNonArgumentRegister;
   ASSERT(temp0 != temp1);
   summary->set_temp(0, Location::RegisterLocation(temp0));
   summary->set_temp(1, Location::RegisterLocation(temp1));
+
+  if (temp != kNoRegister) {
+    summary->set_temp(2, Location::RegisterLocation(temp));
+  }
 
   summary->set_in(TargetAddressIndex(),
                   Location::RegisterLocation(
@@ -6482,13 +6452,12 @@ LocationSummary* FfiCallInstr::MakeLocationSummary(Zone* zone,
   return summary;
 }
 
-void FfiCallInstr::EmitParamMoves(FlowGraphCompiler* compiler) {
+void FfiCallInstr::EmitParamMoves(FlowGraphCompiler* compiler,
+                                  const Register saved_fp,
+                                  const Register temp) {
   if (compiler::Assembler::EmittingComments()) {
     __ Comment("EmitParamMoves");
   }
-
-  const Register saved_fp = locs()->temp(0).reg();
-  const Register temp = locs()->temp(1).reg();
 
   // Moves for return pointer.
   const auto& return_location =
@@ -6597,7 +6566,9 @@ void FfiCallInstr::EmitParamMoves(FlowGraphCompiler* compiler) {
   }
 }
 
-void FfiCallInstr::EmitReturnMoves(FlowGraphCompiler* compiler) {
+void FfiCallInstr::EmitReturnMoves(FlowGraphCompiler* compiler,
+                                   const Register temp0,
+                                   const Register temp1) {
   __ Comment("EmitReturnMoves");
 
   const auto& returnLocation =
@@ -6617,16 +6588,17 @@ void FfiCallInstr::EmitReturnMoves(FlowGraphCompiler* compiler) {
     ASSERT(returnLocation.payload_type().IsCompound());
     ASSERT(marshaller_.PassTypedData());
 
-    const Register temp0 = TMP != kNoRegister ? TMP : locs()->temp(0).reg();
-    const Register temp1 = locs()->temp(1).reg();
-    ASSERT(temp0 != temp1);
-
     // Get the typed data pointer which we have pinned to a stack slot.
     const Location typed_data_loc = locs()->in(TypedDataIndex());
     ASSERT(typed_data_loc.IsStackSlot());
     ASSERT(typed_data_loc.base_reg() == FPREG);
-    __ LoadMemoryValue(temp0, FPREG, 0);
-    __ LoadMemoryValue(temp0, temp0, typed_data_loc.ToStackSlotOffset());
+    // If this is a leaf call there is no extra call frame to step through.
+    if (is_leaf_) {
+      __ LoadMemoryValue(temp0, FPREG, typed_data_loc.ToStackSlotOffset());
+    } else {
+      __ LoadMemoryValue(temp0, FPREG, 0);
+      __ LoadMemoryValue(temp0, temp0, typed_data_loc.ToStackSlotOffset());
+    }
     __ LoadField(
         temp0,
         compiler::FieldAddress(

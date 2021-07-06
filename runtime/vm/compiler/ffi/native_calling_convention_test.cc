@@ -11,10 +11,11 @@ namespace dart {
 namespace compiler {
 namespace ffi {
 
-void RunSignatureTest(dart::Zone* zone,
-                      const char* name,
-                      const NativeTypes& argument_types,
-                      const NativeType& return_type) {
+const NativeCallingConvention& RunSignatureTest(
+    dart::Zone* zone,
+    const char* name,
+    const NativeTypes& argument_types,
+    const NativeType& return_type) {
   const auto& native_signature =
       *new (zone) NativeFunctionType(argument_types, return_type);
 
@@ -42,6 +43,8 @@ void RunSignatureTest(dart::Zone* zone,
     EXPECT_STREQ(expectation_file_contents, test_result);
     free(expectation_file_contents);
   }
+
+  return native_calling_convention;
 }
 
 UNIT_TEST_CASE_WITH_ZONE(NativeCallingConvention_int8x10) {
@@ -491,6 +494,7 @@ UNIT_TEST_CASE_WITH_ZONE(NativeCallingConvention_struct8bytesPackedx10) {
 // See the *.expect in ./unit_tests for this behavior.
 UNIT_TEST_CASE_WITH_ZONE(NativeCallingConvention_structPacked) {
   const auto& int8_type = *new (Z) NativePrimitiveType(kInt8);
+  const auto& int32_type = *new (Z) NativePrimitiveType(kInt32);
   const auto& double_type = *new (Z) NativePrimitiveType(kDouble);
 
   auto& member_types = *new (Z) NativeTypes(Z, 2);
@@ -501,13 +505,22 @@ UNIT_TEST_CASE_WITH_ZONE(NativeCallingConvention_structPacked) {
   EXPECT_EQ(9, struct_type.SizeInBytes());
   EXPECT(struct_type.ContainsUnalignedMembers());
 
-  auto& arguments = *new (Z) NativeTypes(Z, 11);
+  auto& arguments = *new (Z) NativeTypes(Z, 13);
   arguments.Add(&struct_type);
   arguments.Add(&struct_type);
-  arguments.Add(&int8_type);    // Backfilling int registers.
+  arguments.Add(&struct_type);
+  arguments.Add(&struct_type);
+  arguments.Add(&struct_type);
+  arguments.Add(&struct_type);
+  arguments.Add(&struct_type);
+  arguments.Add(&struct_type);
+  arguments.Add(&struct_type);
+  arguments.Add(&struct_type);
   arguments.Add(&double_type);  // Backfilling float registers.
+  arguments.Add(&int32_type);   // Backfilling int registers.
+  arguments.Add(&int32_type);   // Backfilling int registers.
 
-  RunSignatureTest(Z, "structPacked", arguments, struct_type);
+  RunSignatureTest(Z, "structPacked", arguments, double_type);
 }
 
 // The union is only 5 bytes because it's members are packed.
@@ -553,6 +566,63 @@ UNIT_TEST_CASE_WITH_ZONE(NativeCallingConvention_union5bytesPackedx10) {
   arguments.Add(&union_type);
 
   RunSignatureTest(Z, "union5bytesPackedx10", arguments, union_type);
+}
+
+// http://dartbug.com/46127
+//
+// See the *.expect in ./unit_tests for this behavior.
+UNIT_TEST_CASE_WITH_ZONE(NativeCallingConvention_regress46127) {
+  const auto& uint64_type = *new (Z) NativePrimitiveType(kUint64);
+
+  auto& member_types = *new (Z) NativeTypes(Z, 1);
+  member_types.Add(&uint64_type);
+  const auto& struct_type = NativeStructType::FromNativeTypes(Z, member_types);
+
+  EXPECT_EQ(8, struct_type.SizeInBytes());
+
+  auto& arguments = *new (Z) NativeTypes(Z, 0);
+
+  const auto& native_calling_convention =
+      RunSignatureTest(Z, "regress46127", arguments, struct_type);
+
+#if defined(TARGET_ARCH_IA32) &&                                               \
+    (defined(DART_TARGET_OS_ANDROID) || defined(DART_TARGET_OS_LINUX))
+  // We must count the result pointer passed on the stack as well.
+  EXPECT_EQ(4, native_calling_convention.StackTopInBytes());
+#else
+  EXPECT_EQ(0, native_calling_convention.StackTopInBytes());
+#endif
+}
+
+// MacOS arm64 alignment of 12-byte homogenous float structs.
+//
+// http://dartbug.com/46305
+//
+// See the *.expect in ./unit_tests for this behavior.
+UNIT_TEST_CASE_WITH_ZONE(NativeCallingConvention_struct12bytesFloatx6) {
+  const auto& float_type = *new (Z) NativePrimitiveType(kFloat);
+  const auto& int64_type = *new (Z) NativePrimitiveType(kInt64);
+
+  auto& member_types = *new (Z) NativeTypes(Z, 3);
+  member_types.Add(&float_type);
+  member_types.Add(&float_type);
+  member_types.Add(&float_type);
+  const auto& struct_type = NativeStructType::FromNativeTypes(Z, member_types);
+
+#if defined(TARGET_ARCH_ARM64) &&                                              \
+    (defined(DART_TARGET_OS_MACOS) || defined(DART_TARGET_OS_MACOS_IOS))
+  EXPECT_EQ(4, struct_type.AlignmentInBytesStack());
+#endif
+
+  auto& arguments = *new (Z) NativeTypes(Z, 6);
+  arguments.Add(&struct_type);
+  arguments.Add(&struct_type);
+  arguments.Add(&struct_type);
+  arguments.Add(&struct_type);
+  arguments.Add(&struct_type);
+  arguments.Add(&struct_type);
+
+  RunSignatureTest(Z, "struct12bytesFloatx6", arguments, int64_type);
 }
 
 }  // namespace ffi

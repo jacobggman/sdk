@@ -22,6 +22,7 @@ import 'package:analysis_server/src/services/completion/dart/local_library_contr
 import 'package:analysis_server/src/services/completion/dart/local_reference_contributor.dart';
 import 'package:analysis_server/src/services/completion/dart/named_constructor_contributor.dart';
 import 'package:analysis_server/src/services/completion/dart/override_contributor.dart';
+import 'package:analysis_server/src/services/completion/dart/redirecting_contributor.dart';
 import 'package:analysis_server/src/services/completion/dart/relevance_tables.g.dart';
 import 'package:analysis_server/src/services/completion/dart/static_member_contributor.dart';
 import 'package:analysis_server/src/services/completion/dart/suggestion_builder.dart';
@@ -91,6 +92,7 @@ class DartCompletionManager {
   Future<List<CompletionSuggestion>> computeSuggestions(
     OperationPerformanceImpl performance,
     CompletionRequest request, {
+    bool enableImportedReferenceContributor = true,
     bool enableOverrideContributor = true,
     bool enableUriContributor = true,
     CompletionPreference? completionPreference,
@@ -129,6 +131,7 @@ class DartCompletionManager {
       CombinatorContributor(),
       ExtensionMemberContributor(),
       FieldFormalContributor(),
+      if (enableImportedReferenceContributor) ImportedReferenceContributor(),
       KeywordContributor(),
       LabelContributor(),
       LibraryMemberContributor(),
@@ -137,6 +140,7 @@ class DartCompletionManager {
       LocalReferenceContributor(),
       NamedConstructorContributor(),
       if (enableOverrideContributor) OverrideContributor(),
+      RedirectingContributor(),
       StaticMemberContributor(),
       TypeMemberContributor(),
       if (enableUriContributor) UriContributor(),
@@ -146,8 +150,6 @@ class DartCompletionManager {
     if (includedElementKinds != null) {
       _addIncludedElementKinds(dartRequest);
       _addIncludedSuggestionRelevanceTags(dartRequest);
-    } else {
-      contributors.add(ImportedReferenceContributor());
     }
 
     try {
@@ -351,7 +353,19 @@ class DartCompletionRequestImpl implements DartCompletionRequest {
 
   @override
   OpType get opType {
-    return _opType ??= OpType.forCompletion(target, offset);
+    var opType = _opType;
+    if (opType == null) {
+      opType = OpType.forCompletion(target, offset);
+      var contextType = this.contextType;
+      if (contextType is FunctionType) {
+        contextType = contextType.returnType;
+      }
+      if (contextType != null && contextType.isVoid) {
+        opType.includeVoidReturnSuggestions = true;
+      }
+      _opType = opType;
+    }
+    return opType;
   }
 
   /// The source range that represents the region of text that should be

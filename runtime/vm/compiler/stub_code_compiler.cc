@@ -3,6 +3,7 @@
 // BSD-style license that can be found in the LICENSE file.
 
 #include "vm/compiler/runtime_api.h"
+#include "vm/flags.h"
 #include "vm/globals.h"
 
 // For `StubCodeCompiler::GenerateAllocateUnhandledExceptionStub`
@@ -99,11 +100,12 @@ void StubCodeCompiler::GenerateInitLateInstanceFieldStub(Assembler* assembler,
   __ SmiUntag(kScratchReg);
   __ SmiTag(kScratchReg);
 #endif
-  __ LoadFieldAddressForRegOffset(kAddressReg, kInstanceReg, kScratchReg);
+  __ LoadCompressedFieldAddressForRegOffset(kAddressReg, kInstanceReg,
+                                            kScratchReg);
 
   Label throw_exception;
   if (is_final) {
-    __ LoadMemoryValue(kScratchReg, kAddressReg, 0);
+    __ LoadCompressed(kScratchReg, Address(kAddressReg, 0));
     __ CompareObject(kScratchReg, SentinelObject());
     __ BranchIf(NOT_EQUAL, &throw_exception);
   }
@@ -114,8 +116,8 @@ void StubCodeCompiler::GenerateInitLateInstanceFieldStub(Assembler* assembler,
   __ MoveRegister(kScratchReg, InitInstanceFieldABI::kResultReg);
   __ StoreIntoObject(kInstanceReg, Address(kAddressReg, 0), kScratchReg);
 #else
-  __ StoreIntoObject(kInstanceReg, Address(kAddressReg, 0),
-                     InitInstanceFieldABI::kResultReg);
+  __ StoreCompressedIntoObject(kInstanceReg, Address(kAddressReg, 0),
+                               InitInstanceFieldABI::kResultReg);
 #endif  // defined(TARGET_ARCH_IA32)
 
   __ LeaveStubFrame();
@@ -767,6 +769,9 @@ void StubCodeCompiler::GenerateAllocateClosureStub(Assembler* assembler) {
       target::RoundedAllocationSize(target::Closure::InstanceSize());
   __ EnsureHasClassIdInDEBUG(kFunctionCid, AllocateClosureABI::kFunctionReg,
                              AllocateClosureABI::kScratchReg);
+  __ EnsureHasClassIdInDEBUG(kContextCid, AllocateClosureABI::kContextReg,
+                             AllocateClosureABI::kScratchReg,
+                             /*can_be_null=*/true);
   if (!FLAG_use_slow_path && FLAG_inline_alloc) {
     Label slow_case;
     __ Comment("Inline allocation of uninitialized closure");
@@ -798,12 +803,30 @@ void StubCodeCompiler::GenerateAllocateClosureStub(Assembler* assembler) {
     __ StoreToSlotNoBarrier(AllocateClosureABI::kFunctionReg,
                             AllocateClosureABI::kResultReg,
                             Slot::Closure_function());
-    __ StoreToSlotNoBarrier(AllocateClosureABI::kScratchReg,
+    __ StoreToSlotNoBarrier(AllocateClosureABI::kContextReg,
                             AllocateClosureABI::kResultReg,
                             Slot::Closure_context());
     __ StoreToSlotNoBarrier(AllocateClosureABI::kScratchReg,
                             AllocateClosureABI::kResultReg,
                             Slot::Closure_hash());
+#if defined(DART_PRECOMPILER) && !defined(TARGET_ARCH_IA32)
+    if (FLAG_precompiled_mode) {
+      // Set the closure entry point in precompiled mode, either to the function
+      // entry point in bare instructions mode or to 0 otherwise (to catch
+      // misuse). This overwrites the scratch register, but there are no more
+      // boxed fields.
+      if (FLAG_use_bare_instructions) {
+        __ LoadFromSlot(AllocateClosureABI::kScratchReg,
+                        AllocateClosureABI::kFunctionReg,
+                        Slot::Function_entry_point());
+      } else {
+        __ LoadImmediate(AllocateClosureABI::kScratchReg, 0);
+      }
+      __ StoreToSlotNoBarrier(AllocateClosureABI::kScratchReg,
+                              AllocateClosureABI::kResultReg,
+                              Slot::Closure_entry_point());
+    }
+#endif
 
     // AllocateClosureABI::kResultReg: new object.
     __ Ret();
@@ -815,7 +838,9 @@ void StubCodeCompiler::GenerateAllocateClosureStub(Assembler* assembler) {
   __ EnterStubFrame();
   __ PushObject(NullObject());  // Space on the stack for the return value.
   __ PushRegister(AllocateClosureABI::kFunctionReg);
-  __ CallRuntime(kAllocateClosureRuntimeEntry, 1);
+  __ PushRegister(AllocateClosureABI::kContextReg);
+  __ CallRuntime(kAllocateClosureRuntimeEntry, 2);
+  __ PopRegister(AllocateClosureABI::kContextReg);
   __ PopRegister(AllocateClosureABI::kFunctionReg);
   __ PopRegister(AllocateClosureABI::kResultReg);
   ASSERT(target::WillAllocateNewOrRememberedObject(instance_size));

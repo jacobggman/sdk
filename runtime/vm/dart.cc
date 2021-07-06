@@ -160,6 +160,10 @@ static void CheckOffsets() {
       CHECK_FIELD, CHECK_ARRAY, CHECK_SIZEOF, CHECK_ARRAY_SIZEOF,
       CHECK_PAYLOAD_SIZEOF, CHECK_RANGE, CHECK_CONSTANT))
 
+  ONLY_IN_PRECOMPILED(AOT_OFFSETS_LIST(CHECK_FIELD, CHECK_ARRAY, CHECK_SIZEOF,
+                                       CHECK_ARRAY_SIZEOF, CHECK_PAYLOAD_SIZEOF,
+                                       CHECK_RANGE, CHECK_CONSTANT))
+
   if (!ok) {
     FATAL(
         "CheckOffsets failed. Try updating offsets by running "
@@ -216,14 +220,6 @@ char* Dart::Init(const uint8_t* vm_isolate_snapshot,
     if (error != nullptr) {
       return error;
     }
-  }
-  if (FLAG_causal_async_stacks && FLAG_lazy_async_stacks) {
-    return Utils::StrDup(
-        "To use --lazy-async-stacks, please disable --causal-async-stacks!");
-  }
-  // TODO(cskau): Remove once flag deprecation has been completed.
-  if (FLAG_causal_async_stacks) {
-    return Utils::StrDup("--causal-async-stacks is deprecated!");
   }
 
   UntaggedFrame::Init();
@@ -981,7 +977,7 @@ const char* Dart::FeaturesString(IsolateGroup* isolate_group,
 
 // Generated code must match the host architecture and ABI.
 #if defined(TARGET_ARCH_ARM)
-#if defined(TARGET_OS_MACOS) || defined(TARGET_OS_MACOS_IOS)
+#if defined(DART_TARGET_OS_MACOS) || defined(DART_TARGET_OS_MACOS_IOS)
     buffer.AddString(" arm-ios");
 #else
     buffer.AddString(" arm-eabi");
@@ -989,7 +985,7 @@ const char* Dart::FeaturesString(IsolateGroup* isolate_group,
     buffer.AddString(TargetCPUFeatures::hardfp_supported() ? " hardfp"
                                                            : " softfp");
 #elif defined(TARGET_ARCH_ARM64)
-#if defined(TARGET_OS_FUCHSIA)
+#if defined(DART_TARGET_OS_FUCHSIA)
     // See signal handler cheat in Assembler::EnterFrame.
     buffer.AddString(" arm64-fuchsia");
 #else
@@ -998,7 +994,7 @@ const char* Dart::FeaturesString(IsolateGroup* isolate_group,
 #elif defined(TARGET_ARCH_IA32)
     buffer.AddString(" ia32");
 #elif defined(TARGET_ARCH_X64)
-#if defined(TARGET_OS_WINDOWS)
+#if defined(DART_TARGET_OS_WINDOWS)
     buffer.AddString(" x64-win");
 #else
     buffer.AddString(" x64-sysv");

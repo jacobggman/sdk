@@ -101,6 +101,10 @@ void benchmark(Component component, List<Library> libraries) {
             evaluateAnnotations: true,
             enableTripleShift: target
                 .isExperimentEnabledGlobally(ExperimentalFlag.tripleShift),
+            enableConstFunctions: target
+                .isExperimentEnabledGlobally(ExperimentalFlag.constFunctions),
+            enableConstructorTearOff: target.isExperimentEnabledGlobally(
+                ExperimentalFlag.constructorTearoffs),
             errorOnUnevaluatedConstant:
                 incrementalCompiler.context.options.errorOnUnevaluatedConstant);
         print("Transformed constants with $environmentDefinesDescription"

@@ -87,6 +87,13 @@ void Class::PrintJSONImpl(JSONStream* stream, bool ref) const {
   const String& scrubbed_name = String::Handle(ScrubbedName());
   const String& vm_name = String::Handle(Name());
   AddNameProperties(&jsobj, scrubbed_name.ToCString(), vm_name.ToCString());
+  const Script& script = Script::Handle(this->script());
+  if (!script.IsNull()) {
+    jsobj.AddLocation(script, token_pos(), end_token_pos());
+  }
+
+  jsobj.AddProperty("library", Object::Handle(library()));
+
   if (ref) {
     return;
   }
@@ -115,11 +122,6 @@ void Class::PrintJSONImpl(JSONStream* stream, bool ref) const {
     Type& mix = Type::Handle();
     mix ^= interface_array.At(interface_array.Length() - 1);
     jsobj.AddProperty("mixin", mix);
-  }
-  jsobj.AddProperty("library", Object::Handle(library()));
-  const Script& script = Script::Handle(this->script());
-  if (!script.IsNull()) {
-    jsobj.AddLocation(script, token_pos(), end_token_pos());
   }
   {
     JSONArray interfaces_array(&jsobj, "interfaces");
@@ -317,6 +319,12 @@ void Function::PrintJSONImpl(JSONStream* stream, bool ref) const {
   jsobj.AddProperty("const", is_const());
   jsobj.AddProperty("_intrinsic", is_intrinsic());
   jsobj.AddProperty("_native", is_native());
+
+  const Script& script = Script::Handle(this->script());
+  if (!script.IsNull()) {
+    jsobj.AddLocation(script, token_pos(), end_token_pos());
+  }
+
   if (ref) {
     return;
   }
@@ -347,11 +355,6 @@ void Function::PrintJSONImpl(JSONStream* stream, bool ref) const {
     if (!field.IsNull()) {
       jsobj.AddProperty("_field", field);
     }
-  }
-
-  const Script& script = Script::Handle(this->script());
-  if (!script.IsNull()) {
-    jsobj.AddLocation(script, token_pos(), end_token_pos());
   }
 }
 
@@ -390,11 +393,17 @@ void Field::PrintJSONImpl(JSONStream* stream, bool ref) const {
   jsobj.AddProperty("static", is_static());
   jsobj.AddProperty("final", is_final());
   jsobj.AddProperty("const", is_const());
+
+  const class Script& script = Script::Handle(Script());
+  if (!script.IsNull()) {
+    jsobj.AddLocation(script, token_pos(), end_token_pos());
+  }
+
   if (ref) {
     return;
   }
   if (is_static()) {
-    const Instance& valueObj = Instance::Handle(StaticValue());
+    const Object& valueObj = Object::Handle(StaticValue());
     jsobj.AddProperty("staticValue", valueObj);
   }
 
@@ -415,10 +424,6 @@ void Field::PrintJSONImpl(JSONStream* stream, bool ref) const {
     jsobj.AddProperty("_guardLength", "variable");
   } else {
     jsobj.AddPropertyF("_guardLength", "%" Pd, guarded_list_length());
-  }
-  const class Script& script = Script::Handle(Script());
-  if (!script.IsNull()) {
-    jsobj.AddLocation(script, token_pos());
   }
 }
 
@@ -483,6 +488,27 @@ void Script::PrintJSONImpl(JSONStream* stream, bool ref) const {
   }
 }
 
+static void PrintShowHideNamesToJSON(JSONObject* jsobj, const Namespace& ns) {
+  Array& arr = Array::Handle();
+  String& name = String::Handle();
+  arr ^= ns.show_names();
+  if (!arr.IsNull()) {
+    JSONArray jsarr(jsobj, "shows");
+    for (intptr_t i = 0; i < arr.Length(); ++i) {
+      name ^= arr.At(i);
+      jsarr.AddValue(name.ToCString());
+    }
+  }
+  arr ^= ns.hide_names();
+  if (!arr.IsNull()) {
+    JSONArray jsarr(jsobj, "hides");
+    for (intptr_t i = 0; i < arr.Length(); ++i) {
+      name ^= arr.At(i);
+      jsarr.AddValue(name.ToCString());
+    }
+  }
+}
+
 void Library::PrintJSONImpl(JSONStream* stream, bool ref) const {
   const String& id = String::Handle(private_key());
   JSONObject jsobj(stream);
@@ -524,6 +550,7 @@ void Library::PrintJSONImpl(JSONStream* stream, bool ref) const {
       jsdep.AddProperty("isImport", true);
       target = ns.target();
       jsdep.AddProperty("target", target);
+      PrintShowHideNamesToJSON(&jsdep, ns);
     }
 
     // Exports.
@@ -538,6 +565,7 @@ void Library::PrintJSONImpl(JSONStream* stream, bool ref) const {
       jsdep.AddProperty("isImport", false);
       target = ns.target();
       jsdep.AddProperty("target", target);
+      PrintShowHideNamesToJSON(&jsdep, ns);
     }
 
     // Prefixed imports.
@@ -564,6 +592,7 @@ void Library::PrintJSONImpl(JSONStream* stream, bool ref) const {
             jsdep.AddProperty("prefix", prefix_name.ToCString());
             target = ns.target();
             jsdep.AddProperty("target", target);
+            PrintShowHideNamesToJSON(&jsdep, ns);
           }
         }
       }
@@ -927,6 +956,25 @@ void ContextScope::PrintJSONImpl(JSONStream* stream, bool ref) const {
   Object::PrintJSONImpl(stream, ref);
 }
 
+void Sentinel::PrintJSONImpl(JSONStream* stream, bool ref) const {
+  // Handle certain special sentinel values.
+  if (ptr() == Object::sentinel().ptr()) {
+    JSONObject jsobj(stream);
+    jsobj.AddProperty("type", "Sentinel");
+    jsobj.AddProperty("kind", "NotInitialized");
+    jsobj.AddProperty("valueAsString", "<not initialized>");
+    return;
+  } else if (ptr() == Object::transition_sentinel().ptr()) {
+    JSONObject jsobj(stream);
+    jsobj.AddProperty("type", "Sentinel");
+    jsobj.AddProperty("kind", "BeingInitialized");
+    jsobj.AddProperty("valueAsString", "<being initialized>");
+    return;
+  }
+
+  Object::PrintJSONImpl(stream, ref);
+}
+
 void MegamorphicCache::PrintJSONImpl(JSONStream* stream, bool ref) const {
   JSONObject jsobj(stream);
   AddCommonObjectProperties(&jsobj, "Object", ref);
@@ -1069,19 +1117,6 @@ void Instance::PrintSharedInstanceJSON(JSONObject* jsobj, bool ref) const {
 
 void Instance::PrintJSONImpl(JSONStream* stream, bool ref) const {
   JSONObject jsobj(stream);
-
-  // Handle certain special instance values.
-  if (ptr() == Object::sentinel().ptr()) {
-    jsobj.AddProperty("type", "Sentinel");
-    jsobj.AddProperty("kind", "NotInitialized");
-    jsobj.AddProperty("valueAsString", "<not initialized>");
-    return;
-  } else if (ptr() == Object::transition_sentinel().ptr()) {
-    jsobj.AddProperty("type", "Sentinel");
-    jsobj.AddProperty("kind", "BeingInitialized");
-    jsobj.AddProperty("valueAsString", "<being initialized>");
-    return;
-  }
 
   PrintSharedInstanceJSON(&jsobj, ref);
   // TODO(regis): Wouldn't it be simpler to provide a Closure::PrintJSONImpl()?

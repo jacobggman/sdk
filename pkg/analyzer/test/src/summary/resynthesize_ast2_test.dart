@@ -26,7 +26,8 @@ import 'test_strategies.dart';
 
 main() {
   defineReflectiveSuite(() {
-    defineReflectiveTests(ResynthesizeAst2Test);
+    defineReflectiveTests(ResynthesizeAstKeepLinkingTest);
+    defineReflectiveTests(ResynthesizeAstFromBytesTest);
     // defineReflectiveTests(ApplyCheckElementTextReplacements);
   });
 }
@@ -39,10 +40,15 @@ class ApplyCheckElementTextReplacements {
 }
 
 @reflectiveTest
-class ResynthesizeAst2Test extends AbstractResynthesizeTest
+abstract class ResynthesizeAst2Test extends AbstractResynthesizeTest
     with ResynthesizeTestCases {
   /// The shared SDK bundle, computed once and shared among test invocations.
   static _SdkBundle? _sdkBundle;
+
+  /// We need to test both cases - when we keep linking libraries (happens for
+  /// new or invalidated libraries), and when we load libraries from bytes
+  /// (happens internally in Blaze or when we have cached summaries).
+  bool get keepLinkingLibraries;
 
   _SdkBundle get sdkBundle {
     if (_sdkBundle != null) {
@@ -59,7 +65,10 @@ class ResynthesizeAst2Test extends AbstractResynthesizeTest
       var inputUnits = <LinkInputUnit>[];
       _addLibraryUnits(source, unit, inputUnits, featureSet);
       inputLibraries.add(
-        LinkInputLibrary(source, inputUnits),
+        LinkInputLibrary(
+          source: source,
+          units: inputUnits,
+        ),
       );
     }
 
@@ -78,7 +87,6 @@ class ResynthesizeAst2Test extends AbstractResynthesizeTest
     var sdkLinkResult = link(elementFactory, inputLibraries, true);
 
     return _sdkBundle = _SdkBundle(
-      astBytes: sdkLinkResult.astBytes,
       resolutionBytes: sdkLinkResult.resolutionBytes,
     );
   }
@@ -95,9 +103,7 @@ class ResynthesizeAst2Test extends AbstractResynthesizeTest
     for (var inputLibrary in inputLibraries) {
       for (var inputUnit in inputLibrary.units) {
         var informativeBytes = writeUnitInformative(inputUnit.unit);
-        // TODO(scheglov) store Uri, don't parse
-        var uri = Uri.parse(inputUnit.uriStr);
-        unitsInformativeBytes[uri] = informativeBytes;
+        unitsInformativeBytes[inputUnit.uri] = informativeBytes;
       }
     }
 
@@ -124,13 +130,18 @@ class ResynthesizeAst2Test extends AbstractResynthesizeTest
 
     var linkResult = link(elementFactory, inputLibraries, true);
 
-    elementFactory.addBundle(
-      BundleReader(
-        elementFactory: elementFactory,
-        unitsInformativeBytes: unitsInformativeBytes,
-        resolutionBytes: linkResult.resolutionBytes,
-      ),
-    );
+    if (!keepLinkingLibraries) {
+      elementFactory.removeBundle(
+        inputLibraries.map((e) => e.uriStr).toSet(),
+      );
+      elementFactory.addBundle(
+        BundleReader(
+          elementFactory: elementFactory,
+          unitsInformativeBytes: unitsInformativeBytes,
+          resolutionBytes: linkResult.resolutionBytes,
+        ),
+      );
+    }
 
     return elementFactory.libraryOfUri('${source.uri}')!;
   }
@@ -146,10 +157,18 @@ class ResynthesizeAst2Test extends AbstractResynthesizeTest
     FeatureSet featureSet,
   ) {
     units.add(
-      LinkInputUnit(null, definingSource, false, definingUnit),
+      LinkInputUnit(
+        partDirectiveIndex: null,
+        source: definingSource,
+        isSynthetic: false,
+        unit: definingUnit,
+      ),
     );
+
+    var partDirectiveIndex = -1;
     for (var directive in definingUnit.directives) {
       if (directive is PartDirective) {
+        ++partDirectiveIndex;
         var relativeUriStr = directive.uri.stringValue;
 
         var partSource = sourceFactory.resolveUri(
@@ -161,7 +180,13 @@ class ResynthesizeAst2Test extends AbstractResynthesizeTest
           var text = _readSafely(partSource.fullName);
           var unit = parseText(text, featureSet);
           units.add(
-            LinkInputUnit(relativeUriStr, partSource, false, unit),
+            LinkInputUnit(
+              partDirectiveIndex: partDirectiveIndex,
+              partUriStr: relativeUriStr,
+              source: partSource,
+              isSynthetic: false,
+              unit: unit,
+            ),
           );
         }
       }
@@ -185,7 +210,10 @@ class ResynthesizeAst2Test extends AbstractResynthesizeTest
     var units = <LinkInputUnit>[];
     _addLibraryUnits(source, unit, units, featureSet);
     libraries.add(
-      LinkInputLibrary(source, units),
+      LinkInputLibrary(
+        source: source,
+        units: units,
+      ),
     );
 
     void addRelativeUriStr(StringLiteral uriNode) {
@@ -214,6 +242,18 @@ class ResynthesizeAst2Test extends AbstractResynthesizeTest
   }
 }
 
+@reflectiveTest
+class ResynthesizeAstFromBytesTest extends ResynthesizeAst2Test {
+  @override
+  bool get keepLinkingLibraries => false;
+}
+
+@reflectiveTest
+class ResynthesizeAstKeepLinkingTest extends ResynthesizeAst2Test {
+  @override
+  bool get keepLinkingLibraries => true;
+}
+
 class _AnalysisSessionForLinking implements AnalysisSessionImpl {
   @override
   final ClassHierarchy classHierarchy = ClassHierarchy();
@@ -226,11 +266,9 @@ class _AnalysisSessionForLinking implements AnalysisSessionImpl {
 }
 
 class _SdkBundle {
-  final Uint8List astBytes;
   final Uint8List resolutionBytes;
 
   _SdkBundle({
-    required this.astBytes,
     required this.resolutionBytes,
   });
 }
