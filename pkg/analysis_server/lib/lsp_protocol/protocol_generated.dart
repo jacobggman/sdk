@@ -21560,9 +21560,7 @@ class RenameParams
       {required this.newName,
       required this.textDocument,
       required this.position,
-      this.workDoneToken,
-      this.changeClassFileName});
-      
+      this.workDoneToken});
   static RenameParams fromJson(Map<String, dynamic> json) {
     final newName = json['newName'];
     final textDocument = TextDocumentIdentifier.fromJson(json['textDocument']);
@@ -21574,13 +21572,11 @@ class RenameParams
             : (json['workDoneToken'] is String
                 ? Either2<int, String>.t2(json['workDoneToken'])
                 : (throw '''${json['workDoneToken']} was not one of (int, String)''')));
-    final changeClassFileName = json['changeClassFileName'];
     return RenameParams(
         newName: newName,
         textDocument: textDocument,
         position: position,
-        workDoneToken: workDoneToken,
-        changeClassFileName: changeClassFileName,);
+        workDoneToken: workDoneToken);
   }
 
   /// The new name of the symbol. If the given name is not valid the request
@@ -21595,10 +21591,6 @@ class RenameParams
 
   /// An optional token that a server can use to report work done progress.
   final Either2<int, String>? workDoneToken;
-
-  /// An field token that a server will know to change the name of the file 
-  /// when rename class (by the naming convention of dart). If null ask user 
-  final bool? changeClassFileName;
 
   Map<String, dynamic> toJson() {
     var __result = <String, dynamic>{};
