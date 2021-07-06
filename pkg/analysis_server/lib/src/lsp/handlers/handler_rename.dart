@@ -205,8 +205,9 @@ class RenameHandler extends MessageHandler<RenameParams, WorkspaceEdit?> {
       if (!changeClassName) {
         return success(workspaceEdit);
       }
-      bool saveToNotChangeFileName = params.changeClassFileName != null &&
-          params.changeClassFileName == false;
+
+      bool saveToNotChangeFileName =
+          server.clientConfiguration.changeClassFileName == false;
       if (saveToNotChangeFileName) {
         return success(workspaceEdit);
       }
@@ -214,10 +215,6 @@ class RenameHandler extends MessageHandler<RenameParams, WorkspaceEdit?> {
       final oldClassName = refactoring.oldName;
 
       final oldPath = path.result;
-      final resolvedUnit = await server.getResolvedUnit(oldPath);
-      if (resolvedUnit == null) {
-        return success(null);
-      }
 
       final oldPathResource = server.resourceProvider.getResource(oldPath);
 
@@ -229,7 +226,7 @@ class RenameHandler extends MessageHandler<RenameParams, WorkspaceEdit?> {
         return success(workspaceEdit);
       }
 
-      final newFileName = _toLowercaseWithUnderscores(refactoring.newName);
+      final newFileName = _toFileName(refactoring.newName);
 
       final fileFolder = oldPathResource.parent2;
 
@@ -237,15 +234,14 @@ class RenameHandler extends MessageHandler<RenameParams, WorkspaceEdit?> {
 
       final newFilePath = pathLib.join(folderPath, newFileName);
 
-      if (params.changeClassFileName == null) {
+      if (server.clientConfiguration.changeClassFileName == null) {
         // ask the user if want to once time and all times
         final userChoice = await server.showUserPrompt(
           MessageType.Info,
           "Do you want also to change the file $oldNameFile name to $newFileName?",
           [
-            MessageActionItem(title: UserPromptActions.thisTimeOnly),
-            MessageActionItem(title: UserPromptActions.always),
-            MessageActionItem(title: UserPromptActions.never),
+            MessageActionItem(title: UserPromptActions.yes),
+            MessageActionItem(title: UserPromptActions.no),
           ],
         );
 
@@ -253,14 +249,13 @@ class RenameHandler extends MessageHandler<RenameParams, WorkspaceEdit?> {
           return success(workspaceEdit);
         }
 
-        if (userChoice.title == UserPromptActions.never) {
-          // TODO: save the choise
+        if (userChoice.title == UserPromptActions.no) {
           return success(workspaceEdit);
         }
       }
 
       final refactoringFileName = MoveFileRefactoring(server.resourceProvider,
-          server.refactoringWorkspace, resolvedUnit, oldPath)
+          server.refactoringWorkspace, unit.result, oldPath)
         ..newFile = newFilePath;
 
       final changeFileName = await refactoringFileName.createChange();
@@ -273,30 +268,12 @@ class RenameHandler extends MessageHandler<RenameParams, WorkspaceEdit?> {
 
   bool _checkSameString(
       String upperCamelCase, String lowerCaseWithUnderscores) {
-    return _toLowercaseWithUnderscores(upperCamelCase) ==
-        lowerCaseWithUnderscores;
+    return _toFileName(upperCamelCase) == lowerCaseWithUnderscores;
   }
 
-  // return empty string if can't convert
-  String _toLowercaseWithUnderscores(String upperCamelCase) {
-    if (upperCamelCase.isEmpty) {
-      return "";
-    }
-
-    String returnString = upperCamelCase[0].toLowerCase();
-
-    const upperAAscii = 65;
-    const upperZAscii = 90;
-    const upperToLowerDiff = 32;
-
-    for (int char in upperCamelCase.runes) {
-      bool isUpperCase = char >= upperAAscii && char <= upperZAscii;
-      if (isUpperCase) {
-        returnString += "_" + String.fromCharCode(char - upperToLowerDiff);
-      } else {
-        returnString += String.fromCharCode(char);
-      }
-    }
-    return returnString;
-  }
+  final _upperCasePattern = RegExp('[A-Z]');
+  String _toFileName(String className) => className
+      .replaceAllMapped(_upperCasePattern,
+          (match) => match.start == 0 ? match[0]! : '_${match[0]}')
+      .toLowerCase();
 }
