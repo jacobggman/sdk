@@ -35,6 +35,7 @@ Client workspace settings are requested with `workspace/configuration` during in
 
 - `dart.analysisExcludedFolders`: An array of paths (absolute or relative to each workspace folder) that should be excluded from analysis.
 - `dart.enableSdkFormatter`: When set to `false`, prevents registration (or unregisters) the SDK formatter. When set to `true` or not supplied, will register/reregister the SDK formatter.
+- `dart.changeClassFileName`: When set to `false`, don't change the file name when refactor the name of the class when the class have the same name as the file name, with the dart naming convention. When set to `true` change the file name. If unspecified ask the user if he want to change the file name.
 - `dart.lineLength`: The number of characters the formatter should wrap code at. If unspecified, code will be wrapped at `80` characters.
 - `dart.completeFunctionCalls`: Completes functions/methods with their required parameters.
 - `dart.showTodos`: Whether to generate diagnostics for TODO comments. If unspecified, diagnostics will not be generated.
