@@ -8,8 +8,10 @@ import 'package:analysis_server/src/lsp/constants.dart';
 import 'package:analysis_server/src/lsp/handlers/handlers.dart';
 import 'package:analysis_server/src/lsp/lsp_analysis_server.dart';
 import 'package:analysis_server/src/lsp/mapping.dart';
+import 'package:analysis_server/src/services/correction/status.dart';
 import 'package:analysis_server/src/services/refactoring/refactoring.dart';
 import 'package:analysis_server/src/services/refactoring/rename_class_member.dart';
+import 'package:analyzer/dart/analysis/results.dart';
 import 'package:path/path.dart' as pathLib;
 
 class PrepareRenameHandler
@@ -137,52 +139,21 @@ class RenameHandler extends MessageHandler<RenameParams, WorkspaceEdit?> {
       // without a prompt.
 
       // Check the rename is valid here.
-      final initStatus = await refactoring.checkInitialConditions();
-      if (token.isCancellationRequested) {
-        return cancelled();
-      }
-      if (initStatus.hasFatalError) {
-        return error(
-            ServerErrorCodes.RenameNotValid, initStatus.problem!.message, null);
+      final renameValidError = _checkRenameValid(refactoring, token);
+      if (renameValidError != null) {
+        return renameValidError;
       }
 
-      // Check the name is valid.
       refactoring.newName = params.newName;
-      final optionsStatus = refactoring.checkNewName();
-      if (optionsStatus.hasError) {
-        return error(ServerErrorCodes.RenameNotValid,
-            optionsStatus.problem!.message, null);
+
+      final nameValidError = _checkNameValid(refactoring);
+      if (nameValidError != null) {
+        return nameValidError;
       }
 
-      // Final validation.
-      final finalStatus = await refactoring.checkFinalConditions();
-      if (token.isCancellationRequested) {
-        return cancelled();
-      }
-      if (finalStatus.hasFatalError) {
-        return error(ServerErrorCodes.RenameNotValid,
-            finalStatus.problem!.message, null);
-      } else if (finalStatus.hasError || finalStatus.hasWarning) {
-        // Ask the user whether to proceed with the rename.
-        final userChoice = await server.showUserPrompt(
-          MessageType.Warning,
-          finalStatus.message!,
-          [
-            MessageActionItem(title: UserPromptActions.renameAnyway),
-            MessageActionItem(title: UserPromptActions.cancel),
-          ],
-        );
-
-        if (token.isCancellationRequested) {
-          return cancelled();
-        }
-
-        if (userChoice.title != UserPromptActions.renameAnyway) {
-          // Return an empty workspace edit response so we do not perform any
-          // rename, but also so we do not cause the client to show the user an
-          // error after they clicked cancel.
-          return success(emptyWorkspaceEdit);
-        }
+      final finalValidationError = _finalValidation(refactoring, token);
+      if (finalValidationError != null) {
+        return finalValidationError;
       }
 
       // Compute the actual change.
@@ -212,58 +183,153 @@ class RenameHandler extends MessageHandler<RenameParams, WorkspaceEdit?> {
         return success(workspaceEdit);
       }
 
-      final oldClassName = refactoring.oldName;
+      return _renameFile(
+        refactoring,
+        token,
+        workspaceEdit,
+        path,
+        unit,
+        params.newName,
+      );
+    });
+  }
 
-      final oldPath = path.result;
+  _checkRenameValid(
+      RenameRefactoring refactoring, CancellationToken token) async {
+    final initStatus = await refactoring.checkInitialConditions();
+    if (token.isCancellationRequested) {
+      return cancelled();
+    }
+    if (initStatus.hasFatalError) {
+      return error(
+          ServerErrorCodes.RenameNotValid, initStatus.problem!.message, null);
+    }
+    return null;
+  }
 
-      final oldPathResource = server.resourceProvider.getResource(oldPath);
+  _checkNameValid(RenameRefactoring refactoring) {
+    final optionsStatus = refactoring.checkNewName();
+    if (optionsStatus.hasError) {
+      return error(ServerErrorCodes.RenameNotValid,
+          optionsStatus.problem!.message, null);
+    }
 
-      final oldNameFile = oldPathResource.shortName;
+    return null;
+  }
 
-      bool needToChangeFileName = _checkSameString(oldClassName, oldNameFile);
+  _finalValidation(
+    RenameRefactoring refactoring,
+    CancellationToken token,
+  ) async {
+    final finalStatus = await refactoring.checkFinalConditions();
+    if (token.isCancellationRequested) {
+      return cancelled();
+    }
+    if (finalStatus.hasFatalError) {
+      return error(
+          ServerErrorCodes.RenameNotValid, finalStatus.problem!.message, null);
+    } else if (finalStatus.hasError || finalStatus.hasWarning) {
+      // Ask the user whether to proceed with the rename.
+      final userChoice = await _askUserProceedRename(finalStatus);
 
-      if (!needToChangeFileName) {
+      if (token.isCancellationRequested) {
+        return cancelled();
+      }
+
+      if (userChoice == false) {
+        // Return an empty workspace edit response so we do not perform any
+        // rename, but also so we do not cause the client to show the user an
+        // error after they clicked cancel.
+        return success(emptyWorkspaceEdit);
+      }
+    }
+
+    return null;
+  }
+
+  Future<bool> _askUserProceedRename(RefactoringStatus finalStatus) async {
+    final userChoice = await server.showUserPrompt(
+      MessageType.Warning,
+      finalStatus.message!,
+      [
+        MessageActionItem(title: UserPromptActions.renameAnyway),
+        MessageActionItem(title: UserPromptActions.cancel),
+      ],
+    );
+    return userChoice.title == UserPromptActions.renameAnyway;
+  }
+
+  Future<ErrorOr<WorkspaceEdit?>> _renameFile(
+    RenameRefactoring refactoring,
+    CancellationToken token,
+    WorkspaceEdit workspaceEdit,
+    ErrorOr<String> path,
+    ErrorOr<ResolvedUnitResult> unit,
+    String newName,
+  ) async {
+    // if need to change the file name
+    final oldClassName = refactoring.oldName;
+
+    final oldPath = path.result;
+
+    final oldPathResource = server.resourceProvider.getResource(oldPath);
+
+    final oldNameFile = oldPathResource.shortName;
+
+    bool needToChangeFileName = _checkSameString(oldClassName, oldNameFile);
+
+    if (!needToChangeFileName) {
+      return success(workspaceEdit);
+    }
+
+    final newFileName = _toFileName(newName);
+
+    final fileFolder = oldPathResource.parent2;
+
+    final folderPath = fileFolder.path;
+
+    final newFilePath = pathLib.join(folderPath, newFileName);
+
+    if (server.clientConfiguration.changeClassFileName == null) {
+      final userChoice = await _askUserIfChangeFileName(
+        oldNameFile,
+        newFileName,
+      );
+
+      if (token.isCancellationRequested) {
         return success(workspaceEdit);
       }
 
-      final newFileName = _toFileName(refactoring.newName);
-
-      final fileFolder = oldPathResource.parent2;
-
-      final folderPath = fileFolder.path;
-
-      final newFilePath = pathLib.join(folderPath, newFileName);
-
-      if (server.clientConfiguration.changeClassFileName == null) {
-        // ask the user if want to once time and all times
-        final userChoice = await server.showUserPrompt(
-          MessageType.Info,
-          "Do you want also to change the file $oldNameFile name to $newFileName?",
-          [
-            MessageActionItem(title: UserPromptActions.yes),
-            MessageActionItem(title: UserPromptActions.no),
-          ],
-        );
-
-        if (token.isCancellationRequested) {
-          return success(workspaceEdit);
-        }
-
-        if (userChoice.title == UserPromptActions.no) {
-          return success(workspaceEdit);
-        }
+      if (userChoice == false) {
+        return success(workspaceEdit);
       }
+    }
 
-      final refactoringFileName = MoveFileRefactoring(server.resourceProvider,
-          server.refactoringWorkspace, unit.result, oldPath)
-        ..newFile = newFilePath;
+    //final clientCapabilities = server.clientCapabilities;
 
-      final changeFileName = await refactoringFileName.createChange();
+    final refactoringFileName = MoveFileRefactoring(server.resourceProvider,
+        server.refactoringWorkspace, unit.result, oldPath)
+      ..newFile = newFilePath;
 
-      final edit = createWorkspaceEdit(server, changeFileName);
+    final changeFileName = await refactoringFileName.createChange();
 
-      return success(edit);
-    });
+    final edit = createWorkspaceEdit(server, changeFileName);
+
+    return success(edit);
+  }
+
+  Future<bool> _askUserIfChangeFileName(
+      String oldNameFile, String newFileName) async {
+    final userChoice = await server.showUserPrompt(
+      MessageType.Info,
+      "Do you want also to change the file $oldNameFile name to $newFileName?",
+      [
+        MessageActionItem(title: UserPromptActions.yes),
+        MessageActionItem(title: UserPromptActions.no),
+      ],
+    );
+
+    return userChoice.title == UserPromptActions.yes;
   }
 
   bool _checkSameString(
