@@ -305,17 +305,26 @@ class RenameHandler extends MessageHandler<RenameParams, WorkspaceEdit?> {
       }
     }
 
-    //final clientCapabilities = server.clientCapabilities;
+    final clientCapabilities = server.clientCapabilities;
 
-    final refactoringFileName = MoveFileRefactoring(server.resourceProvider,
-        server.refactoringWorkspace, unit.result, oldPath)
-      ..newFile = newFilePath;
+    final renameOptionsSupport = clientCapabilities!.renameValidation;
 
-    final changeFileName = await refactoringFileName.createChange();
+    if (renameOptionsSupport) {
+      // TODO: call ResourceOperation
+      // TODO: add tests
+    }
 
-    final edit = createWorkspaceEdit(server, changeFileName);
+    return success(workspaceEdit);
 
-    return success(edit);
+    // final refactoringFileName = MoveFileRefactoring(server.resourceProvider,
+    //     server.refactoringWorkspace, unit.result, oldPath)
+    //   ..newFile = newFilePath;
+
+    // final changeFileName = await refactoringFileName.createChange();
+
+    // final edit = createWorkspaceEdit(server, changeFileName);
+
+    //return success(edit);
   }
 
   Future<bool> _askUserIfChangeFileName(
